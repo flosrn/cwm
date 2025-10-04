@@ -1,17 +1,18 @@
 import { useEffect } from "react";
 import { useForm, Controller } from "react-hook-form";
+import { set, get, transform, isEmpty, isPlainObject } from "lodash-es";
 import { useStore } from "../lib/query";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Link, useParams } from "react-router-dom";
 import { ChevronLeftIcon } from "lucide-react";
+
 type FieldConfig = {
   label: string;
   name: string;
   type: "text" | "number" | "boolean" | "textarea" | "tags" | "select";
   description?: string;
   placeholder?: string;
-  defaultValue?: any;
   options?: string[];
 };
 
@@ -20,36 +21,60 @@ type SectionConfig = {
   fields: FieldConfig[];
 };
 
-// Helper function to set nested object value from keypath
-function setNestedValue(obj: any, path: string, value: any) {
-  const keys = path.split('.');
-  const lastKey = keys.pop()!;
-  const target = keys.reduce((acc, key) => {
-    if (!acc[key]) acc[key] = {};
-    return acc[key];
-  }, obj);
-  target[lastKey] = value;
+// Helper function to check if a leaf value should be included
+function isValidValue(value: any): boolean {
+  // Exclude undefined, null, NaN
+  if (value === undefined || value === null || Number.isNaN(value)) {
+    return false;
+  }
+  
+  // Exclude empty strings (trim to handle whitespace-only strings)
+  if (typeof value === 'string' && value.trim() === '') {
+    return false;
+  }
+  
+  return true;
 }
 
-// Helper function to get nested object value from keypath
-function getNestedValue(obj: any, path: string) {
-  return path.split('.').reduce((acc, key) => acc?.[key], obj);
+// Helper function to recursively remove invalid values and empty objects
+function deepClean(obj: any): any {
+  // If it's not a plain object, check if it's a valid value
+  if (!isPlainObject(obj)) {
+    return isValidValue(obj) ? obj : undefined;
+  }
+  
+  // Recursively clean nested objects
+  const cleaned = transform(obj, (result: any, value, key) => {
+    const cleanedValue = deepClean(value);
+    
+    // Only add if the cleaned value is valid (not undefined and not an empty object)
+    if (cleanedValue !== undefined && !(isPlainObject(cleanedValue) && isEmpty(cleanedValue))) {
+      result[key] = cleanedValue;
+    }
+  }, {});
+  
+  return cleaned;
 }
 
-// Helper function to convert flat form data to nested JSON
+// Helper function to convert flat form data to nested JSON using lodash
 function convertToNestedJSON(formData: Record<string, any>) {
   const { configName, ...settings } = formData;
-  const settingsJSON: any = {};
   
-  Object.entries(settings).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== '') {
-      setNestedValue(settingsJSON, key, value);
-    }
-  });
+  // Transform flat keypaths to nested structure
+  const settingsJSON = transform(
+    settings,
+    (result, value, key) => {
+      set(result, key, value);
+    },
+    {} as Record<string, any>
+  );
+  
+  // Recursively remove invalid values and empty objects
+  const cleanedSettings = deepClean(settingsJSON);
   
   return {
     configName,
-    "settings.json": settingsJSON
+    "settings.json": cleanedSettings
   };
 }
 
@@ -112,7 +137,6 @@ const fields: SectionConfig[] = [
         name: "includeCoAuthoredBy",
         type: "boolean",
         description: "Include co-authored-by Claude byline in git commits and pull requests",
-        defaultValue: true
       },
       {
         label: "Model",
@@ -209,24 +233,6 @@ const fields: SectionConfig[] = [
   {
     sectionName: "Environment Variables",
     fields: [
-      {
-        label: "ANTHROPIC_BASE_URL",
-        name: "env.ANTHROPIC_BASE_URL",
-        type: "text",
-        description: "Override the API URL for model requests"
-      },
-      {
-        label: "ANTHROPIC_API_KEY",
-        name: "env.ANTHROPIC_API_KEY",
-        type: "text",
-        description: "API key sent as X-Api-Key header, typically for the Claude SDK"
-      },
-      {
-        label: "ANTHROPIC_AUTH_TOKEN",
-        name: "env.ANTHROPIC_AUTH_TOKEN",
-        type: "text",
-        description: "This value will be sent as the Authorization header."
-      },
       {
         label: "ANTHROPIC_CUSTOM_HEADERS",
         name: "env.ANTHROPIC_CUSTOM_HEADERS",
@@ -511,7 +517,6 @@ const fields: SectionConfig[] = [
         name: "env.USE_BUILTIN_RIPGREP",
         type: "boolean",
         description: "Use built-in ripgrep (uncheck to use system-installed rg)",
-        defaultValue: true
       },
       {
         label: "VERTEX_REGION_CLAUDE_3_5_HAIKU",
@@ -565,11 +570,9 @@ export function ConfigEditorPage() {
   const defaultValues: Record<string, any> = { configName: storeData.name };
   fields.forEach(section => {
     section.fields.forEach(field => {
-      const value = getNestedValue(storeData.settings, field.name);
+      const value = get(storeData.settings, field.name);
       if (value !== undefined) {
         defaultValues[field.name] = value;
-      } else if (field.defaultValue !== undefined) {
-        defaultValues[field.name] = field.defaultValue;
       }
     });
   });
@@ -578,11 +581,11 @@ export function ConfigEditorPage() {
 
   // Watch all form values and convert to nested JSON
   const formValues = watch();
-  const combinedJSON = convertToNestedJSON(formValues);
-
+  
   // Log the combined JSON whenever it changes
   useEffect(() => {
-    console.log('Combined JSON:', combinedJSON);
+    const combinedJSON = convertToNestedJSON(formValues);
+    console.log('Combined JSON:', JSON.stringify(combinedJSON, null, 2));
   }, [formValues]);
 
   return (
@@ -662,7 +665,9 @@ export function ConfigEditorPage() {
                       />
                     ) : field.type === 'number' ? (
                       <input 
-                        {...register(field.name, { valueAsNumber: true })} 
+                        {...register(field.name, { 
+                          setValueAs: (v) => v === '' ? undefined : Number(v)
+                        })} 
                         type="number" 
                         className="text-xs px-2 text-muted-foreground border rounded-sm w-1/2 h-7 bg-white" 
                         placeholder={field.placeholder}
