@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useStores, useSetCurrentConfig, useCreateConfig } from "../lib/query";
 import { cn } from "@/lib/utils";
-import { PencilLineIcon, PlusIcon } from "lucide-react";
+import { LinkIcon, PencilLineIcon, PlusIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 
@@ -74,7 +74,12 @@ function ConfigStores() {
               })}
             >
               <div>
-                {store.title}
+                <div>{store.title}</div>
+                {store.settings.env?.ANTHROPIC_BASE_URL && (
+                  <div className="text-xs text-muted-foreground mt-1 truncate " title={store.settings.env.ANTHROPIC_BASE_URL}>
+                    {store.settings.env.ANTHROPIC_BASE_URL}
+                  </div>
+                )}
               </div>
 
               <div className="flex justify-end">
