@@ -224,9 +224,7 @@ function MCPCreatePanel({ onClose }: { onClose?: () => void }) {
         })
         .with("manual", () => {
           return (
-            <div className="">
-              <p>手动安装</p>
-            </div>
+            <CustomMCPPanel onClose={onClose} />
           )
         })
         .exhaustive()
@@ -314,6 +312,120 @@ function RecommendMCPPanel({ onClose }: { onClose?: () => void }) {
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function CustomMCPPanel({ onClose }: { onClose?: () => void }) {
+  const [customConfig, setCustomConfig] = useState("");
+  const addMcpServer = useAddGlobalMcpServer();
+  const { data: mcpServers } = useGlobalMcpServers();
+
+  const handleAddCustomMcpServer = async () => {
+    try {
+      // Validate JSON format
+      let configObject;
+      try {
+        configObject = JSON.parse(customConfig);
+      } catch (error) {
+        await message("Invalid JSON format. Please enter a valid JSON configuration.", {
+          title: "Invalid JSON",
+          kind: "error"
+        });
+        return;
+      }
+
+      // Check if it's an object with at least one server
+      if (typeof configObject !== "object" || configObject === null) {
+        await message("Configuration must be a JSON object.", {
+          title: "Invalid Configuration",
+          kind: "error"
+        });
+        return;
+      }
+
+      const serverNames = Object.keys(configObject);
+      if (serverNames.length === 0) {
+        await message("Configuration must contain at least one MCP server.", {
+          title: "Invalid Configuration",
+          kind: "error"
+        });
+        return;
+      }
+
+      // Check for duplicate server names
+      const existingNames = mcpServers ? Object.keys(mcpServers) : [];
+      const duplicateNames = serverNames.filter(name => existingNames.includes(name));
+
+      if (duplicateNames.length > 0) {
+        await message(`MCP server(s) already exist: ${duplicateNames.join(", ")}`, {
+          title: "Duplicate MCP Servers",
+          kind: "warning"
+        });
+        return;
+      }
+
+      // Show confirmation dialog
+      const confirmed = await ask(
+        `Do you want to add ${serverNames.length} MCP server(s)?`,
+        { title: "Add Custom MCP Servers", kind: "info" }
+      );
+
+      if (confirmed) {
+        // Add each server
+        for (const [serverName, serverConfig] of Object.entries(configObject)) {
+          addMcpServer.mutate({
+            serverName,
+            serverConfig: serverConfig as Record<string, any>
+          });
+        }
+
+        // Clear input and close dialog
+        setCustomConfig("");
+        onClose?.();
+      }
+    } catch (error) {
+      console.error("Failed to add custom MCP servers:", error);
+      if (error instanceof Error && !error.message.includes("already exists")) {
+        toast.error("Failed to add MCP servers");
+      }
+    }
+  };
+
+  return (
+    <div className="">
+      <div className="bg-zinc-50 p-4 rounded-md space-y-3">
+        <textarea
+          value={customConfig}
+          onChange={(e) => setCustomConfig(e.target.value)}
+          placeholder={`{
+  "postgres": {
+    "command": "npx",
+    "args": [
+      "-y",
+      "@modelcontextprotocol/server-postgres",
+      "postgresql://localhost/mydb"
+    ]
+  }
+}`}
+          className="w-full h-[240px] p-3 rounded-md border border-input bg-background outline-none resize-none"
+          spellCheck={false}
+        />
+
+        <div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full text-sm"
+            onClick={handleAddCustomMcpServer}
+            disabled={!customConfig.trim()}
+          >
+            添加
+          </Button>
+        </div>
+      </div>
+
+
     </div>
   )
 }
