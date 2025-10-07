@@ -630,6 +630,12 @@ pub async fn get_global_mcp_servers() -> Result<std::collections::HashMap<String
 }
 
 #[tauri::command]
+pub async fn check_mcp_server_exists(server_name: String) -> Result<bool, String> {
+    let mcp_servers = get_global_mcp_servers().await?;
+    Ok(mcp_servers.contains_key(&server_name))
+}
+
+#[tauri::command]
 pub async fn update_global_mcp_server(
     server_name: String,
     server_config: Value,
@@ -658,6 +664,53 @@ pub async fn update_global_mcp_server(
 
     // Update the specific server
     mcp_servers.insert(server_name, server_config);
+
+    // Write back to file
+    let json_content = serde_json::to_string_pretty(&json_value)
+        .map_err(|e| format!("Failed to serialize JSON: {}", e))?;
+
+    std::fs::write(&claude_json_path, json_content)
+        .map_err(|e| format!("Failed to write .claude.json: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_global_mcp_server(server_name: String) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_json_path = home_dir.join(".claude.json");
+
+    if !claude_json_path.exists() {
+        return Err("Claude configuration file does not exist".to_string());
+    }
+
+    // Read existing .claude.json
+    let content = std::fs::read_to_string(&claude_json_path)
+        .map_err(|e| format!("Failed to read .claude.json: {}", e))?;
+
+    let mut json_value: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse .claude.json: {}", e))?;
+
+    // Check if mcpServers exists
+    let mcp_servers = json_value
+        .as_object_mut()
+        .unwrap()
+        .get_mut("mcpServers")
+        .and_then(|servers| servers.as_object_mut())
+        .ok_or("No mcpServers found in .claude.json")?;
+
+    // Check if the server exists
+    if !mcp_servers.contains_key(&server_name) {
+        return Err(format!("MCP server '{}' not found", server_name));
+    }
+
+    // Remove the server
+    mcp_servers.remove(&server_name);
+
+    // If mcpServers is now empty, we can optionally remove the entire mcpServers object
+    if mcp_servers.is_empty() {
+        json_value.as_object_mut().unwrap().remove("mcpServers");
+    }
 
     // Write back to file
     let json_content = serde_json::to_string_pretty(&json_value)

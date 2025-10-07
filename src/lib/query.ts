@@ -290,6 +290,30 @@ export const useAddGlobalMcpServer = () => {
   });
 };
 
+export const useCheckMcpServerExists = (serverName: string, options?: { enabled?: boolean }) => {
+  return useQuery({
+    queryKey: ["check-mcp-server-exists", serverName],
+    queryFn: () => invoke<boolean>("check_mcp_server_exists", { serverName }),
+    enabled: options?.enabled !== false && !!serverName, // Only run when serverName is provided
+  });
+};
+
+export const useDeleteGlobalMcpServer = () => {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (serverName: string) => invoke<void>("delete_global_mcp_server", { serverName }),
+    onSuccess: () => {
+      toast.success("MCP server deleted successfully");
+      queryClient.invalidateQueries({ queryKey: ["global-mcp-servers"] });
+    },
+    onError: (error) => {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast.error(`Failed to delete MCP server: ${errorMessage}`);
+    },
+  });
+};
+
 // Helper function to rebuild tray menu
 const rebuildTrayMenu = async () => {
   try {

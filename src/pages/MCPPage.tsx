@@ -2,15 +2,17 @@ import { useState, Suspense } from "react";
 import { Button } from "@/components/ui/button";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { ExternalLinkIcon, HammerIcon, PlusIcon, SaveIcon } from "lucide-react";
-import { useGlobalMcpServers, useUpdateGlobalMcpServer, type McpServer } from "@/lib/query";
+import { ExternalLinkIcon, HammerIcon, PlusIcon, SaveIcon, TrashIcon } from "lucide-react";
+import { useGlobalMcpServers, useUpdateGlobalMcpServer, useAddGlobalMcpServer, useDeleteGlobalMcpServer, type McpServer } from "@/lib/query";
 import { toast } from "sonner";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ask, message } from "@tauri-apps/plugin-dialog";
 import { match } from "ts-pattern";
 
 function MCPPageContent() {
   const { data: mcpServers } = useGlobalMcpServers();
   const updateMcpServer = useUpdateGlobalMcpServer();
+  const deleteMcpServer = useDeleteGlobalMcpServer();
   const [serverConfigs, setServerConfigs] = useState<Record<string, string>>({});
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
@@ -33,6 +35,18 @@ function MCPPageContent() {
       });
     } catch (error) {
       toast.error(`Invalid JSON configuration for ${serverName}`);
+    }
+  };
+
+  const handleDeleteServer = async (serverName: string) => {
+    // Show confirmation dialog
+    const confirmed = await ask(
+      `Are you sure you want to delete the MCP server "${serverName}"? This action cannot be undone.`,
+      { title: "Delete MCP Server", kind: "warning" }
+    );
+
+    if (confirmed) {
+      deleteMcpServer.mutate(serverName);
     }
   };
 
@@ -104,7 +118,7 @@ function MCPPageContent() {
                       className="min-h-[100px] w-full p-2 text-md outline-none resize-none bg-white rounded-lg"
                       spellCheck={false}
                     />
-                    <div className="flex  bg-zinc-50">
+                    <div className="flex justify-between  bg-zinc-50">
                       <Button
                         variant="outline"
                         onClick={() => handleSaveConfig(serverName)}
@@ -113,6 +127,15 @@ function MCPPageContent() {
                       >
                         <SaveIcon size={14} className="" />
                         {updateMcpServer.isPending ? "Saving..." : "Save"}
+                      </Button>
+
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeleteServer(serverName)}
+                        disabled={deleteMcpServer.isPending}
+                      >
+                        <TrashIcon size={14} className="" />
                       </Button>
                     </div>
                   </div>
@@ -163,11 +186,14 @@ const builtInMcpServers = [
   },
   {
     name: "github",
-    source: "https://github.com/github/github-mcp-server",
+    source: "https://github.com/github/github-mcp-server/blob/main/docs/installation-guides/install-claude.md",
     description: "GitHub's official MCP Server",
     prefill: `"github": {
       "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/"
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer <YOUR_GITHUB_TOKEN>"
+      }
     }`
   }
 ];
@@ -210,16 +236,63 @@ function MCPCreatePanel() {
 }
 
 function RecommendMCPPanel() {
+  const addMcpServer = useAddGlobalMcpServer();
+  const { data: mcpServers } = useGlobalMcpServers();
+
+  const handleAddMcpServer = async (mcpServer: typeof builtInMcpServers[0]) => {
+    try {
+      // Check if MCP server already exists using cached data
+      const exists = mcpServers && Object.keys(mcpServers).includes(mcpServer.name);
+
+      if (exists) {
+        await message(`MCP server "${mcpServer.name}" already exists`, {
+          title: "MCP Server Exists",
+          kind: "info"
+        });
+        return;
+      }
+
+      // Show confirmation dialog
+      const confirmed = await ask(
+        `Do you want to add the ${mcpServer.name} MCP server?`,
+        { title: "Add MCP Server", kind: "info" }
+      );
+
+      if (confirmed) {
+        // Parse the prefill JSON to get the config object
+        const configObject = JSON.parse(`{${mcpServer.prefill}}`);
+
+        addMcpServer.mutate({
+          serverName: mcpServer.name,
+          serverConfig: configObject[mcpServer.name]
+        });
+      }
+    } catch (error) {
+      console.error("Failed to add MCP server:", error);
+      // Only show toast for unexpected errors, not duplicate server errors
+      if (error instanceof Error && !error.message.includes("already exists")) {
+        toast.error("Failed to add MCP server");
+      }
+    }
+  };
+
   return (
     <div className="grid grid-cols-3 gap-5">
       {builtInMcpServers.map((mcpServer) => (
-        <a role="button" key={mcpServer.name} className="border p-3 rounded-md h-[120px] flex justify-between flex-col hover:bg-primary/10 hover:border-primary/20 hover:text-primary">
+        <div
+          key={mcpServer.name}
+          className="border p-3 rounded-md h-[120px] flex justify-between flex-col hover:bg-primary/10 hover:border-primary/20 hover:text-primary cursor-pointer"
+          onClick={() => handleAddMcpServer(mcpServer)}
+        >
           <div className="flex justify-between items-center">
             <h3 className="font-bold text-primary">{mcpServer.name}</h3>
-            <a onClick={e => {
-              e.stopPropagation()
-              openUrl(mcpServer.source)
-            }} className="text-sm text-muted-foreground flex items-center gap-1 hover:underline">
+            <a
+              onClick={e => {
+                e.stopPropagation()
+                openUrl(mcpServer.source)
+              }}
+              className="text-sm text-muted-foreground flex items-center gap-1 hover:underline"
+            >
               <ExternalLinkIcon size={12} />
               Source
             </a>
@@ -234,7 +307,7 @@ function RecommendMCPPanel() {
           添加
         </Button> */}
           </div>
-        </a>
+        </div>
       ))}
     </div>
   )

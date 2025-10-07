@@ -159,6 +159,8 @@ pub fn run() {
             open_config_path,
             get_global_mcp_servers,
             update_global_mcp_server,
+            delete_global_mcp_server,
+            check_mcp_server_exists,
             check_for_updates,
             install_and_restart,
             rebuild_tray_menu_command
