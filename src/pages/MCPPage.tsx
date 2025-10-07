@@ -81,7 +81,7 @@ function MCPPageContent() {
               </DialogDescription>
             </DialogHeader>
             <div className="py-3 mt-3">
-              <MCPCreatePanel />
+              <MCPCreatePanel onClose={() => setIsDialogOpen(false)} />
             </div>
             {/* <div className="flex justify-end">
               <Button
@@ -198,7 +198,7 @@ const builtInMcpServers = [
   }
 ];
 
-function MCPCreatePanel() {
+function MCPCreatePanel({ onClose }: { onClose?: () => void }) {
   const [currentTab, setCurrentTab] = useState<("recommend" | "manual")>("recommend");
 
   return (
@@ -219,7 +219,7 @@ function MCPCreatePanel() {
       {match(currentTab)
         .with("recommend", () => {
           return (
-            <RecommendMCPPanel />
+            <RecommendMCPPanel onClose={onClose} />
           )
         })
         .with("manual", () => {
@@ -235,7 +235,7 @@ function MCPCreatePanel() {
   );
 }
 
-function RecommendMCPPanel() {
+function RecommendMCPPanel({ onClose }: { onClose?: () => void }) {
   const addMcpServer = useAddGlobalMcpServer();
   const { data: mcpServers } = useGlobalMcpServers();
 
@@ -265,6 +265,11 @@ function RecommendMCPPanel() {
         addMcpServer.mutate({
           serverName: mcpServer.name,
           serverConfig: configObject[mcpServer.name]
+        }, {
+          onSuccess: () => {
+            // Close dialog after successful addition
+            onClose?.();
+          }
         });
       }
     } catch (error) {
