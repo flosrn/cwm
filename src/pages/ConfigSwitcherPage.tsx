@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { PencilLineIcon, PlusIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { GLMBanner } from "@/components/GLMBanner";
 
 export function ConfigSwitcherPage() {
   return (
@@ -49,7 +50,7 @@ function ConfigStores() {
 
   return (
     <div className="">
-      <div className="flex items-center p-3 border-b px-3 justify-between sticky top-0 bg-background z-10 mb-4" data-tauri-drag-region>
+      <div className="flex items-center p-3 border-b px-3 justify-between sticky top-0 bg-background z-10" data-tauri-drag-region>
         <div data-tauri-drag-region>
           <h3 className="font-bold" data-tauri-drag-region>{t("configSwitcher.title")}</h3>
           <p className="text-sm text-muted-foreground" data-tauri-drag-region>
@@ -61,7 +62,11 @@ function ConfigStores() {
           {t("configSwitcher.createConfig")}
         </Button>
       </div>
-      <div className="grid grid-cols-3 lg:grid-cols-4 gap-3 px-4">
+
+      <div className="px-4 pt-4">
+        <GLMBanner />
+      </div>
+      <div className="grid grid-cols-3 lg:grid-cols-4 gap-3 p-4">
         {stores.map((store) => {
           const isCurrentStore = store.using
           return (
