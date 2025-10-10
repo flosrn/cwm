@@ -1478,12 +1478,20 @@ pub async fn add_claude_code_hook() -> Result<(), String> {
         .as_object_mut()
         .unwrap();
 
-    // Define the hook command
-    let hook_command = serde_json::json!({
-        "__ccmate__": true,
-        "type": "command",
-        "command": "curl -s -X POST http://localhost:59948/claude_code/hooks -H 'Content-Type: application/json' --data-binary @- 2>/dev/null || echo"
-    });
+    // Define the hook command based on OS
+    let hook_command = if cfg!(target_os = "windows") {
+        serde_json::json!({
+            "__ccmate__": true,
+            "type": "command",
+            "command": "try { Invoke-RestMethod -Uri http://localhost:59948/claude_code/hooks -Method POST -ContentType 'application/json' -Body $input -ErrorAction Stop } catch { '' }"
+        })
+    } else {
+        serde_json::json!({
+            "__ccmate__": true,
+            "type": "command",
+            "command": "curl -s -X POST http://localhost:59948/claude_code/hooks -H 'Content-Type: application/json' --data-binary @- 2>/dev/null || echo"
+        })
+    };
 
     // Add hooks for Notification, Stop, and PreToolUse events
     let events = ["Notification", "Stop", "PreToolUse"];
