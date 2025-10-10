@@ -116,7 +116,7 @@ export function NotificationPage() {
         </div>
         <div className="border-b px-1 py-3">
           <div className="flex items-center justify-between">
-            <Label htmlFor="preToolUse" className="">{t("notifications.testGeneral")}</Label>
+            <Label htmlFor="preToolUse" className="">{t("notifications.toolUse")}</Label>
             <div className="flex items-center gap-4">
               <Button
                 size="sm"
