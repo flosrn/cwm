@@ -94,12 +94,6 @@ export function Layout() {
                 </li>
               ))}
             </ul>
-            <div className="space-y-2">
-              <div className="px-3">
-                <ThemeToggle />
-              </div>
-              <UpdateButton />
-            </div>
           </div>
         </nav>
         {isProjectsRoute ? (

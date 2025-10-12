@@ -62,7 +62,7 @@ export function UsagePage() {
         ) : usageData && usageData.length > 0 ? (
           <>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-blue-50 border-blue-100 text-blue-700 border-2 p-4 rounded-lg space-y-2">
+              <div className="bg-blue-50 border-blue-100 text-blue-700 border-2 p-4 rounded-lg space-y-2 dark:bg-blue-950/20 dark:border-blue-900/30 dark:text-blue-300">
                 <div className="flex items-center gap-2">
                   <ArrowDownIcon size={12} />
                   <h3 className="font-medium">{t("usage.inputTokens")}</h3>
@@ -71,7 +71,7 @@ export function UsagePage() {
                   {formatLargeNumber(filteredUsageData.reduce((sum, record) => sum + (record.usage?.input_tokens || 0), 0))}
                 </p>
               </div>
-              <div className="bg-emerald-50 border-emerald-100 text-emerald-700 border-2 p-4 rounded-lg space-y-2">
+              <div className="bg-emerald-50 border-emerald-100 text-emerald-700 border-2 p-4 rounded-lg space-y-2 dark:bg-emerald-950/20 dark:border-emerald-900/30 dark:text-emerald-300">
                 <div className="flex items-center gap-2">
                   <ArrowUpIcon size={12} />
                   <h3 className="font-medium">{t("usage.outputTokens")}</h3>
@@ -80,7 +80,7 @@ export function UsagePage() {
                   {formatLargeNumber(filteredUsageData.reduce((sum, record) => sum + (record.usage?.output_tokens || 0), 0))}
                 </p>
               </div>
-              <div className="bg-amber-50 border-amber-100 text-amber-700 border-2 p-4 rounded-lg space-y-2">
+              <div className="bg-amber-50 border-amber-100 text-amber-700 border-2 p-4 rounded-lg space-y-2 dark:bg-amber-950/20 dark:border-amber-900/30 dark:text-amber-300">
                 <div className="flex items-center gap-2">
                   <CircleDotDashedIcon size={12} />
                   <h3 className="font-medium">{t("usage.cacheReadTokens")}</h3>
