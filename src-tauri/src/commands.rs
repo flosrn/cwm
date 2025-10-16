@@ -284,7 +284,7 @@ pub async fn get_stores() -> Result<Vec<ConfigStore>, String> {
             // Create a default store named "原有配置" with existing settings
             let default_store = ConfigStore {
                 id: nanoid::nanoid!(6), // Generate a 6-character ID
-                title: "原有配置".to_string(),
+                title: "Original Config".to_string(),
                 createdAt: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|e| format!("Failed to get timestamp: {}", e))?
