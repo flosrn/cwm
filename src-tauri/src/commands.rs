@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use tauri_plugin_updater::UpdaterExt;
 use reqwest;
 use uuid::Uuid;
+use nanoid;
 
 // Application configuration directory
 const APP_CONFIG_DIR: &str = ".ccconfig";
@@ -270,55 +271,7 @@ pub async fn get_stores() -> Result<Vec<ConfigStore>, String> {
     let stores_file = app_config_path.join("stores.json");
 
     if !stores_file.exists() {
-        // Check if there's an existing ~/.claude/settings.json
-        let claude_settings_path = home_dir.join(".claude/settings.json");
-
-        if claude_settings_path.exists() {
-            // Read existing settings
-            let settings_content = std::fs::read_to_string(&claude_settings_path)
-                .map_err(|e| format!("Failed to read existing Claude settings: {}", e))?;
-
-            let settings_json: Value = serde_json::from_str(&settings_content)
-                .map_err(|e| format!("Failed to parse existing Claude settings: {}", e))?;
-
-            // Create a default store named "原有配置" with existing settings
-            let default_store = ConfigStore {
-                id: nanoid::nanoid!(6), // Generate a 6-character ID
-                title: "Original Config".to_string(),
-                createdAt: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|e| format!("Failed to get timestamp: {}", e))?
-                    .as_secs(),
-                settings: settings_json,
-                using: true, // Set as the active store by default
-            };
-
-            // Ensure app config directory exists
-            std::fs::create_dir_all(&app_config_path)
-                .map_err(|e| format!("Failed to create app config directory: {}", e))?;
-
-            // Create stores.json with the default store
-            let stores_data = StoresData {
-                configs: vec![default_store.clone()],
-                distinct_id: None,
-                notification: Some(NotificationSettings {
-                    enable: true,
-                    enabled_hooks: vec!["Notification".to_string()],
-                }),
-            };
-
-            let json_content = serde_json::to_string_pretty(&stores_data)
-                .map_err(|e| format!("Failed to serialize stores: {}", e))?;
-
-            std::fs::write(&stores_file, json_content)
-                .map_err(|e| format!("Failed to write stores file: {}", e))?;
-
-            println!("Created default store '原有配置' from existing settings.json");
-
-            return Ok(vec![default_store]);
-        } else {
-            return Ok(vec![]);
-        }
+        return Ok(vec![]);
     }
 
     let content = std::fs::read_to_string(&stores_file)
@@ -385,6 +338,35 @@ pub async fn create_config(
 
     // Determine if this should be the active store (true if no other stores exist)
     let should_be_active = stores_data.configs.is_empty();
+
+    // If this is the first config being created and there's an existing settings.json, create an Original Config store
+    if should_be_active {
+        let claude_settings_path = home_dir.join(".claude/settings.json");
+        if claude_settings_path.exists() {
+            // Read existing settings
+            let settings_content = std::fs::read_to_string(&claude_settings_path)
+                .map_err(|e| format!("Failed to read existing Claude settings: {}", e))?;
+
+            let settings_json: Value = serde_json::from_str(&settings_content)
+                .map_err(|e| format!("Failed to parse existing Claude settings: {}", e))?;
+
+            // Create an Original Config store with existing settings
+            let original_store = ConfigStore {
+                id: nanoid::nanoid!(6), // Generate a 6-character ID
+                title: "Original Config".to_string(),
+                createdAt: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| format!("Failed to get timestamp: {}", e))?
+                    .as_secs(),
+                settings: settings_json,
+                using: false, // Original Config should not be active by default
+            };
+
+            // Add the Original Config store to the collection
+            stores_data.configs.push(original_store);
+            println!("Created Original Config store from existing settings.json");
+        }
+    }
 
     // If this is the first store (and therefore active), write its settings to the user's actual settings.json with partial update
     if should_be_active {
