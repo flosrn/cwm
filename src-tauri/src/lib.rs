@@ -23,8 +23,6 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     // Set the window to have a transparent title bar
                     let _ = window.set_title_bar_style(tauri::TitleBarStyle::Overlay);
-                    // Make window transparent on macOS only
-                    let _ = window.set_transparent(true);
                 }
             }
 
