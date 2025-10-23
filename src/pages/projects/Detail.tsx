@@ -2,8 +2,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useClaudeProjects, useClaudeConfigFile, useWriteClaudeConfigFile } from "../../lib/query";
 import { Alert, AlertDescription } from "../../components/ui/alert";
 import { Button } from "../../components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
-import { ArrowLeftIcon, FolderIcon, SaveIcon } from "lucide-react";
+import { ArrowLeftIcon, Check, ChevronsUpDown, FolderIcon, SaveIcon } from "lucide-react";
 import { toast } from "sonner";
 import CodeMirror, { EditorView, keymap } from '@uiw/react-codemirror';
 import { json } from '@codemirror/lang-json';
@@ -11,6 +10,9 @@ import { useCodeMirrorTheme } from "../../lib/use-codemirror-theme";
 import { codeFolding } from '@codemirror/language';
 import { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "../../components/ui/command";
+import { cn } from "../../lib/utils";
 
 export function Detail() {
   const { t } = useTranslation();
@@ -21,6 +23,7 @@ export function Detail() {
   const writeClaudeConfig = useWriteClaudeConfigFile();
   const [jsonContent, setJsonContent] = useState("");
   const [hasChanges, setHasChanges] = useState(false);
+  const [comboboxOpen, setComboboxOpen] = useState(false);
   const codeMirrorTheme = useCodeMirrorTheme();
 
   // Update JSON content when project data loads or path changes
@@ -160,24 +163,49 @@ export function Detail() {
         <div className="flex items-center gap-2">
           <h3 className="font-medium text-sm text-muted-foreground">{t('projects.detail.projectEditor')}</h3>
           <span className="text-muted-foreground text-xs">/</span>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="secondary" size="sm" className="">
-                {project.path}
+          <Popover open={comboboxOpen} onOpenChange={setComboboxOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                variant="secondary"
+                size="sm"
+                role="combobox"
+                aria-expanded={comboboxOpen}
+                className="justify-between min-w-[200px]"
+              >
+                <span className="truncate">{project.path}</span>
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
               </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              {projects.map((proj) => (
-                <DropdownMenuItem
-                  key={proj.path}
-                  onClick={() => handleProjectChange(proj.path)}
-                >
-                  <FolderIcon />
-                  {proj.path}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+            </PopoverTrigger>
+            <PopoverContent className="w-[400px] p-0">
+              <Command>
+                <CommandInput placeholder={t('projects.detail.searchProject')} className="h-9" />
+                <CommandList>
+                  <CommandEmpty>{t('projects.detail.noProjectFound')}</CommandEmpty>
+                  <CommandGroup>
+                    {projects.map((proj) => (
+                      <CommandItem
+                        key={proj.path}
+                        value={proj.path}
+                        onSelect={() => {
+                          handleProjectChange(proj.path);
+                          setComboboxOpen(false);
+                        }}
+                      >
+                        <FolderIcon className="mr-2 h-4 w-4" />
+                        <span className="truncate">{proj.path}</span>
+                        <Check
+                          className={cn(
+                            "ml-auto h-4 w-4",
+                            project.path === proj.path ? "opacity-100" : "opacity-0"
+                          )}
+                        />
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
         </div>
 
         <div className="flex items-center gap-2">
