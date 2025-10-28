@@ -197,5 +197,20 @@
   "glm.zhipuApiKeyPlaceholder": "智譜 API キーを入力してください",
   "glm.creating": "作成中...",
   "glm.createConfig": "設定を作成",
-  "glm.useZhipuGlm": "智譜 GLM を使用"
+  "glm.useZhipuGlm": "智譜 GLM を使用",
+  "minimax.configMainland": "MiniMax (中国) を設定",
+  "minimax.configInternational": "MiniMax (国際) を設定",
+  "minimax.description": "Claude Code で MiniMax を使用",
+  "minimax.minimax": "MiniMax",
+  "minimax.chinaMainland": "中国大陸 (minimaxi.com)",
+  "minimax.international": "国際 (minimax.io)",
+  "minimax.step1": "ステップ 1：API キーを作成",
+  "minimax.enterConsole": "コンソールに入る",
+  "minimax.step2": "ステップ 2：API キーを入力",
+  "minimax.apiKeyPlaceholder": "MiniMax API キーを入力してください",
+  "minimax.creating": "作成中...",
+  "minimax.createConfig": "設定を作成",
+  "minimax.useMiniMax": "MiniMax を使用",
+  "minimax.mainlandTitle": "MiniMax 中国",
+  "minimax.internationalTitle": "MiniMax 国際"
 }
