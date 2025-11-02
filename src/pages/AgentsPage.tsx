@@ -2,7 +2,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { yamlFrontmatter } from "@codemirror/lang-yaml";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import CodeMirror, { EditorView } from "@uiw/react-codemirror";
-import { PlusIcon, SaveIcon, TerminalIcon, TrashIcon } from "lucide-react";
+import { BotIcon, PlusIcon, SaveIcon, TrashIcon } from "lucide-react";
 import { Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -24,18 +24,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-	useClaudeCommands,
-	useDeleteClaudeCommand,
-	useWriteClaudeCommand,
+	useClaudeAgents,
+	useDeleteClaudeAgent,
+	useWriteClaudeAgent,
 } from "@/lib/query";
 import { useCodeMirrorTheme } from "@/lib/use-codemirror-theme";
 
-function CommandsPageContent() {
+function AgentsPageContent() {
 	const { t } = useTranslation();
-	const { data: commands, isLoading, error } = useClaudeCommands();
-	const writeCommand = useWriteClaudeCommand();
-	const deleteCommand = useDeleteClaudeCommand();
-	const [commandEdits, setCommandEdits] = useState<Record<string, string>>({});
+	const { data: agents, isLoading, error } = useClaudeAgents();
+	const writeAgent = useWriteClaudeAgent();
+	const deleteAgent = useDeleteClaudeAgent();
+	const [agentEdits, setAgentEdits] = useState<Record<string, string>>({});
 	const [isDialogOpen, setIsDialogOpen] = useState(false);
 	const codeMirrorTheme = useCodeMirrorTheme();
 
@@ -51,37 +51,37 @@ function CommandsPageContent() {
 		return (
 			<div className="flex items-center justify-center min-h-screen">
 				<div className="text-center text-red-500">
-					{t("commands.error", { error: error.message })}
+					{t("agents.error", { error: error.message })}
 				</div>
 			</div>
 		);
 	}
 
-	const handleContentChange = (commandName: string, content: string) => {
-		setCommandEdits((prev) => ({
+	const handleContentChange = (agentName: string, content: string) => {
+		setAgentEdits((prev) => ({
 			...prev,
-			[commandName]: content,
+			[agentName]: content,
 		}));
 	};
 
-	const handleSaveCommand = async (commandName: string) => {
-		const content = commandEdits[commandName];
+	const handleSaveAgent = async (agentName: string) => {
+		const content = agentEdits[agentName];
 		if (content === undefined) return;
 
-		writeCommand.mutate({
-			commandName,
+		writeAgent.mutate({
+			agentName,
 			content,
 		});
 	};
 
-	const handleDeleteCommand = async (commandName: string) => {
-		const confirmed = await ask(t("commands.deleteConfirm", { commandName }), {
-			title: t("commands.deleteTitle"),
+	const handleDeleteAgent = async (agentName: string) => {
+		const confirmed = await ask(t("agents.deleteConfirm", { agentName }), {
+			title: t("agents.deleteTitle"),
 			kind: "warning",
 		});
 
 		if (confirmed) {
-			deleteCommand.mutate(commandName);
+			deleteAgent.mutate(agentName);
 		}
 	};
 
@@ -93,53 +93,53 @@ function CommandsPageContent() {
 			>
 				<div data-tauri-drag-region>
 					<h3 className="font-bold" data-tauri-drag-region>
-						{t("commands.title")}
+						{t("agents.title")}
 					</h3>
 					<p className="text-sm text-muted-foreground" data-tauri-drag-region>
-						{t("commands.description")}
+						{t("agents.description")}
 					</p>
 				</div>
 				<Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
 					<DialogTrigger asChild>
 						<Button variant="ghost" className="text-muted-foreground" size="sm">
 							<PlusIcon size={14} />
-							{t("commands.addCommand")}
+							{t("agents.addAgent")}
 						</Button>
 					</DialogTrigger>
 					<DialogContent className="max-w-[600px]">
 						<DialogHeader>
 							<DialogTitle className="">
-								{t("commands.addCommandTitle")}
+								{t("agents.addAgentTitle")}
 							</DialogTitle>
 							<DialogDescription className="text-muted-foreground text-sm">
-								{t("commands.addCommandDescription")}
+								{t("agents.addAgentDescription")}
 							</DialogDescription>
 						</DialogHeader>
-						<CreateCommandPanel onClose={() => setIsDialogOpen(false)} />
+						<CreateAgentPanel onClose={() => setIsDialogOpen(false)} />
 					</DialogContent>
 				</Dialog>
 			</div>
 			<div className="">
-				{!commands || commands.length === 0 ? (
+				{!agents || agents.length === 0 ? (
 					<div className="text-center text-muted-foreground py-8">
-						{t("commands.noCommands")}
+						{t("agents.noAgents")}
 					</div>
 				) : (
 					<ScrollArea className="h-full">
 						<div className="">
 							<Accordion type="multiple" className="">
-								{commands.map((command) => (
+								{agents.map((agent) => (
 									<AccordionItem
-										key={command.name}
-										value={command.name}
+										key={agent.name}
+										value={agent.name}
 										className="bg-card"
 									>
 										<AccordionTrigger className="hover:no-underline px-4 py-2 bg-card hover:bg-accent duration-150">
 											<div className="flex items-center gap-2">
-												<TerminalIcon size={12} />
-												<span className="font-medium">{command.name}</span>
+												<BotIcon size={12} />
+												<span className="font-medium">{agent.name}</span>
 												<span className="text-sm text-muted-foreground font-normal">
-													{`~/.claude/commands/${command.name}.md`}
+													{`~/.claude/agents/${agent.name}.md`}
 												</span>
 											</div>
 										</AccordionTrigger>
@@ -148,16 +148,16 @@ function CommandsPageContent() {
 												<div className="rounded-lg overflow-hidden border">
 													<CodeMirror
 														value={
-															commandEdits[command.name] !== undefined
-																? commandEdits[command.name]
-																: command.content
+															agentEdits[agent.name] !== undefined
+																? agentEdits[agent.name]
+																: agent.content
 														}
 														height="180px"
 														theme={codeMirrorTheme}
 														onChange={(value) =>
-															handleContentChange(command.name, value)
+															handleContentChange(agent.name, value)
 														}
-														placeholder={t("commands.contentPlaceholder")}
+														placeholder={t("agents.contentPlaceholder")}
 														extensions={[
 															yamlFrontmatter({
 																content: markdown({
@@ -185,24 +185,24 @@ function CommandsPageContent() {
 												<div className="flex justify-between bg-card">
 													<Button
 														variant="outline"
-														onClick={() => handleSaveCommand(command.name)}
+														onClick={() => handleSaveAgent(agent.name)}
 														disabled={
-															writeCommand.isPending ||
-															commandEdits[command.name] === undefined
+															writeAgent.isPending ||
+															agentEdits[agent.name] === undefined
 														}
 														size="sm"
 													>
 														<SaveIcon size={14} className="" />
-														{writeCommand.isPending
-															? t("commands.saving")
-															: t("commands.save")}
+														{writeAgent.isPending
+															? t("agents.saving")
+															: t("agents.save")}
 													</Button>
 
 													<Button
 														variant="ghost"
 														size="sm"
-														onClick={() => handleDeleteCommand(command.name)}
-														disabled={deleteCommand.isPending}
+														onClick={() => handleDeleteAgent(agent.name)}
+														disabled={deleteAgent.isPending}
 													>
 														<TrashIcon size={14} className="" />
 													</Button>
@@ -220,7 +220,7 @@ function CommandsPageContent() {
 	);
 }
 
-export function CommandsPage() {
+export function AgentsPage() {
 	const { t } = useTranslation();
 
 	return (
@@ -231,57 +231,69 @@ export function CommandsPage() {
 				</div>
 			}
 		>
-			<CommandsPageContent />
+			<AgentsPageContent />
 		</Suspense>
 	);
 }
 
-function CreateCommandPanel({ onClose }: { onClose?: () => void }) {
+function CreateAgentPanel({ onClose }: { onClose?: () => void }) {
 	const { t } = useTranslation();
-	const [commandName, setCommandName] = useState("");
-	const [commandContent, setCommandContent] = useState("");
-	const writeCommand = useWriteClaudeCommand();
-	const { data: commands } = useClaudeCommands();
+	const [agentName, setAgentName] = useState("");
+	const [agentContent, setAgentContent] = useState(`---
+name: your-sub-agent-name
+description: Description of when this subagent should be invoked
+tools: tool1, tool2, tool3  # Optional - inherits all tools if omitted
+model: sonnet  # Optional - specify model alias or 'inherit'
+---
+
+Your subagent's system prompt goes here. This can be multiple paragraphs
+and should clearly define the subagent's role, capabilities, and approach
+to solving problems.
+
+Include specific instructions, best practices, and any constraints
+the subagent should follow.`);
+	const writeAgent = useWriteClaudeAgent();
+	const { data: agents } = useClaudeAgents();
 	const codeMirrorTheme = useCodeMirrorTheme();
 
-	const handleCreateCommand = async () => {
-		// Validate command name
-		if (!commandName.trim()) {
-			await message(t("commands.emptyNameError"), {
-				title: t("commands.validationError"),
+	const handleCreateAgent = async () => {
+		// Validate agent name
+		if (!agentName.trim()) {
+			await message(t("agents.emptyNameError"), {
+				title: t("agents.validationError"),
 				kind: "error",
 			});
 			return;
 		}
 
-		// Check if command already exists
-		const exists = commands && commands.some((cmd) => cmd.name === commandName);
+		// Check if agent already exists
+		const exists = agents?.some((agent) => agent.name === agentName);
 		if (exists) {
-			await message(t("commands.commandExistsError", { commandName }), {
-				title: t("commands.commandExistsTitle"),
+			await message(t("agents.agentExistsError", { agentName }), {
+				title: t("agents.agentExistsTitle"),
 				kind: "info",
 			});
 			return;
 		}
 
 		// Validate content
-		if (!commandContent.trim()) {
-			await message(t("commands.emptyContentError"), {
-				title: t("commands.validationError"),
+		if (!agentContent.trim()) {
+			await message(t("agents.emptyContentError"), {
+				title: t("agents.validationError"),
 				kind: "error",
 			});
 			return;
 		}
 
-		writeCommand.mutate(
+		writeAgent.mutate(
 			{
-				commandName,
-				content: commandContent,
+				agentName,
+				content: agentContent,
 			},
 			{
 				onSuccess: () => {
-					setCommandName("");
-					setCommandContent("");
+					setAgentName("");
+					setAgentContent("");
 					onClose?.();
 				},
 			},
@@ -291,24 +303,24 @@ function CreateCommandPanel({ onClose }: { onClose?: () => void }) {
 	return (
 		<div className="space-y-4 mt-4">
 			<div className="space-y-2">
-				<Label htmlFor="command-name">{t("commands.commandName")}</Label>
+				<Label className="block" htmlFor="agent-name">{t("agents.agentName")}</Label>
 				<Input
-					id="command-name"
-					value={commandName}
-					onChange={(e) => setCommandName(e.target.value)}
-					placeholder={t("commands.commandNamePlaceholder")}
+					id="agent-name"
+					value={agentName}
+					onChange={(e) => setAgentName(e.target.value)}
+					placeholder={t("agents.agentNamePlaceholder")}
 				/>
 			</div>
 
 			<div className="space-y-2">
-				<Label htmlFor="command-content">{t("commands.commandContent")}</Label>
+				<Label className="block" htmlFor="agent-content">{t("agents.agentContent")}</Label>
 				<div className="rounded-lg overflow-hidden border">
 					<CodeMirror
-						value={commandContent}
-						onChange={(value) => setCommandContent(value)}
+						value={agentContent}
+						onChange={(value) => setAgentContent(value)}
 						height="200px"
 						theme={codeMirrorTheme}
-						placeholder={t("commands.contentPlaceholder")}
+						placeholder={t("agents.contentPlaceholder")}
 						extensions={[
 							yamlFrontmatter({
 								content: markdown({
@@ -337,16 +349,16 @@ function CreateCommandPanel({ onClose }: { onClose?: () => void }) {
 
 			<div className="flex justify-end">
 				<Button
-					onClick={handleCreateCommand}
+					onClick={handleCreateAgent}
 					disabled={
-						!commandName.trim() ||
-						!commandContent.trim() ||
-						writeCommand.isPending
+						!agentName.trim() ||
+						!agentContent.trim() ||
+						writeAgent.isPending
 					}
 				>
-					{writeCommand.isPending
-						? t("commands.creating")
-						: t("commands.create")}
+					{writeAgent.isPending
+						? t("agents.creating")
+						: t("agents.create")}
 				</Button>
 			</div>
 		</div>

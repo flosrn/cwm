@@ -4,6 +4,7 @@ import { RouteWrapper } from "./components/RouteWrapper";
 import { CommandsPage } from "./pages/CommandsPage";
 import { ConfigEditorPage } from "./pages/ConfigEditorPage";
 import { ConfigSwitcherPage } from "./pages/ConfigSwitcherPage";
+import { AgentsPage } from "./pages/AgentsPage";
 import { MCPPage } from "./pages/MCPPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { NotificationPage } from "./pages/NotificationPage";
@@ -53,6 +54,14 @@ const router = createBrowserRouter([
 						<MCPPage />
 					</RouteWrapper>
 				),
+			},
+			{
+				path: "agents",
+				element: (
+					<RouteWrapper>
+						<AgentsPage />
+					</RouteWrapper>
+				)
 			},
 			{
 				path: "usage",

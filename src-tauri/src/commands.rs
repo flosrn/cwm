@@ -1985,3 +1985,84 @@ pub async fn delete_claude_command(command_name: String) -> Result<(), String> {
 
     Ok(())
 }
+
+// Agent management functions
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct AgentFile {
+    pub name: String,
+    pub content: String,
+    pub exists: bool,
+}
+
+#[tauri::command]
+pub async fn read_claude_agents() -> Result<Vec<AgentFile>, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let agents_dir = home_dir.join(".claude/agents");
+
+    if !agents_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut agent_files = Vec::new();
+
+    // Read all .md files in the agents directory
+    let entries = std::fs::read_dir(&agents_dir)
+        .map_err(|e| format!("Failed to read agents directory: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+
+        if path.is_file() && path.extension().map(|ext| ext == "md").unwrap_or(false) {
+            let file_name = path.file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let content = std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read agent file {}: {}", path.display(), e))?;
+
+            agent_files.push(AgentFile {
+                name: file_name,
+                content,
+                exists: true,
+            });
+        }
+    }
+
+    // Sort agents alphabetically by name
+    agent_files.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(agent_files)
+}
+
+#[tauri::command]
+pub async fn write_claude_agent(agent_name: String, content: String) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let agents_dir = home_dir.join(".claude/agents");
+    let agent_file_path = agents_dir.join(format!("{}.md", agent_name));
+
+    // Ensure .claude/agents directory exists
+    std::fs::create_dir_all(&agents_dir)
+        .map_err(|e| format!("Failed to create .claude/agents directory: {}", e))?;
+
+    std::fs::write(&agent_file_path, content)
+        .map_err(|e| format!("Failed to write agent file: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_claude_agent(agent_name: String) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let agents_dir = home_dir.join(".claude/agents");
+    let agent_file_path = agents_dir.join(format!("{}.md", agent_name));
+
+    if agent_file_path.exists() {
+        std::fs::remove_file(&agent_file_path)
+            .map_err(|e| format!("Failed to delete agent file: {}", e))?;
+    }
+
+    Ok(())
+}

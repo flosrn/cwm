@@ -1,4 +1,5 @@
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { yamlFrontmatter } from "@codemirror/lang-yaml";
 import CodeMirror, { EditorView } from "@uiw/react-codemirror";
 import { SaveIcon } from "lucide-react";
 import { Suspense, useEffect, useState } from "react";
@@ -117,8 +118,10 @@ function MemoryPageContent() {
 						value={content}
 						height="100%"
 						extensions={[
-							markdown({
-								base: markdownLanguage,
+							yamlFrontmatter({
+								content: markdown({
+									base: markdownLanguage,
+								}),
 							}),
 							EditorView.lineWrapping,
 						]}

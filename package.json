@@ -1,7 +1,7 @@
 {
 	"name": "cc-mate",
 	"private": true,
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
@@ -13,6 +13,7 @@
 		"@codemirror/fold": "^0.19.4",
 		"@codemirror/lang-json": "^6.0.2",
 		"@codemirror/lang-markdown": "^6.4.0",
+		"@codemirror/lang-yaml": "^6.1.2",
 		"@codemirror/language": "^6.11.3",
 		"@codemirror/language-data": "^6.5.1",
 		"@hookform/resolvers": "^5.2.2",
@@ -63,6 +64,7 @@
 		"tailwind-merge": "^3.3.1",
 		"tailwind-variants": "^3.1.1",
 		"ts-pattern": "^5.8.0",
+		"vaul": "^1.1.2",
 		"zod": "^4.1.11"
 	},
 	"devDependencies": {

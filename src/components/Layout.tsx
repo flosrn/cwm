@@ -1,12 +1,14 @@
 import {
 	ActivityIcon,
 	BellIcon,
+	BotIcon,
 	BrainIcon,
 	CpuIcon,
 	FileJsonIcon,
 	FolderIcon,
 	SettingsIcon,
 	TerminalIcon,
+	UserIcon,
 } from "lucide-react";
 import type React from "react";
 import { useTranslation } from "react-i18next";
@@ -35,6 +37,11 @@ export function Layout() {
 			to: "/mcp",
 			icon: CpuIcon,
 			label: t("navigation.mcp"),
+		},
+		{
+			to: "/agents",
+			icon: BotIcon,
+			label: "Agents",
 		},
 		{
 			to: "/memory",

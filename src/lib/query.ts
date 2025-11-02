@@ -568,6 +568,54 @@ export const useDeleteClaudeCommand = () => {
 	});
 };
 
+// Agent management hooks
+export const useClaudeAgents = () =>
+	useQuery({
+		queryKey: ["claude-agents"],
+		queryFn: () => invoke<CommandFile[]>("read_claude_agents"),
+	});
+
+export const useWriteClaudeAgent = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({
+			agentName,
+			content,
+		}: {
+			agentName: string;
+			content: string;
+		}) => invoke<void>("write_claude_agent", { agentName, content }),
+		onSuccess: () => {
+			toast.success("Agent saved successfully");
+			queryClient.invalidateQueries({ queryKey: ["claude-agents"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(`Failed to save agent: ${errorMessage}`);
+		},
+	});
+};
+
+export const useDeleteClaudeAgent = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (agentName: string) =>
+			invoke<void>("delete_claude_agent", { agentName }),
+		onSuccess: () => {
+			toast.success("Agent deleted successfully");
+			queryClient.invalidateQueries({ queryKey: ["claude-agents"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(`Failed to delete agent: ${errorMessage}`);
+		},
+	});
+};
+
 // Helper function to rebuild tray menu
 const rebuildTrayMenu = async () => {
 	try {
