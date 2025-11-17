@@ -10,6 +10,17 @@
 
 </div>
 
+## 💝 Sponsor
+
+<table>
+<tr>
+<td width="180"><img src="https://github.com/user-attachments/assets/c086212b-952c-4a63-9f4c-cb1e5e2d7528" alt="PackyCode" width="150"></td>
+<td>Thanks to PackyCode for sponsoring this project! PackyCode is a reliable and efficient API relay service provider, offering relay services for Claude Code, Codex, Gemini, and more. PackyCode provides special discounts for our software users: register using <a href="https://www.packyapi.com/register?aff=cc-mate">this link</a> and enter the "cc-mate" promo code during recharge to get 10% off.</td>
+</tr>
+</table>
+
+Want to become a sponsor? Contact https://x.com/randyloop
+
 ## 📸 Screenshots
 
 ### Configuration Management
