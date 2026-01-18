@@ -31,12 +31,24 @@ export interface ClaudeSettings {
 	[key: string]: any;
 }
 
+export type WorkspaceType = "settings_only" | "full_directory";
+
 export interface ConfigStore {
 	id: string; // nanoid(6)
 	title: string;
 	createdAt: number;
 	settings: ClaudeSettings;
 	using: boolean;
+	// NEW: Workspace support
+	workspaceType: WorkspaceType;
+	workspacePath?: string;
+	includeScripts: boolean;
+	// Metadata for full directory workspaces
+	skillsCount?: number;
+	commandsCount?: number;
+	agentsCount?: number;
+	pluginsCount?: number;
+	lastSynced?: number;
 }
 
 export interface McpServer {
@@ -141,12 +153,22 @@ export const useCreateConfig = () => {
 		mutationFn: async ({
 			title,
 			settings,
+			workspaceType,
+			includeScripts,
 		}: {
 			title: string;
 			settings: unknown;
+			workspaceType?: WorkspaceType;
+			includeScripts?: boolean;
 		}) => {
 			const id = nanoid(6);
-			return invoke<ConfigStore>("create_config", { id, title, settings });
+			return invoke<ConfigStore>("create_config", {
+				id,
+				title,
+				settings,
+				workspaceType: workspaceType ?? "settings_only",
+				includeScripts: includeScripts ?? false,
+			});
 		},
 		onSuccess: async () => {
 			toast.success(i18n.t("toast.storeCreated"));
@@ -612,6 +634,139 @@ export const useDeleteClaudeAgent = () => {
 			const errorMessage =
 				error instanceof Error ? error.message : String(error);
 			toast.error(`Failed to delete agent: ${errorMessage}`);
+		},
+	});
+};
+
+// Skill management hooks
+export interface SkillFile {
+	name: string;
+	content: string;
+	references_count: number;
+}
+
+export const useClaudeSkills = () =>
+	useQuery({
+		queryKey: ["claude-skills"],
+		queryFn: () => invoke<SkillFile[]>("read_claude_skills"),
+	});
+
+export const useWriteClaudeSkill = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({
+			skillName,
+			content,
+		}: {
+			skillName: string;
+			content: string;
+		}) => invoke<void>("write_claude_skill", { skillName, content }),
+		onSuccess: () => {
+			toast.success("Skill saved successfully");
+			queryClient.invalidateQueries({ queryKey: ["claude-skills"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(`Failed to save skill: ${errorMessage}`);
+		},
+	});
+};
+
+export const useDeleteClaudeSkill = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (skillName: string) =>
+			invoke<void>("delete_claude_skill", { skillName }),
+		onSuccess: () => {
+			toast.success("Skill deleted successfully");
+			queryClient.invalidateQueries({ queryKey: ["claude-skills"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(`Failed to delete skill: ${errorMessage}`);
+		},
+	});
+};
+
+// Plugin management hooks
+export interface PluginInfo {
+	name: string;
+	path: string;
+	is_local: boolean;
+	is_enabled: boolean;
+	has_mcp: boolean;
+	commands_count: number;
+	agents_count: number;
+	skills_count: number;
+	description: string | null;
+}
+
+export const useClaudePlugins = () =>
+	useQuery({
+		queryKey: ["claude-plugins"],
+		queryFn: () => invoke<PluginInfo[]>("read_claude_plugins"),
+	});
+
+export const useTogglePlugin = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({
+			pluginPath,
+			enabled,
+		}: {
+			pluginPath: string;
+			enabled: boolean;
+		}) => invoke<void>("toggle_plugin", { pluginPath, enabled }),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["claude-plugins"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(i18n.t("toast.pluginToggleFailed", { error: errorMessage }));
+		},
+	});
+};
+
+export const useDeleteLocalPlugin = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (pluginName: string) =>
+			invoke<void>("delete_local_plugin", { pluginName }),
+		onSuccess: () => {
+			toast.success(i18n.t("toast.pluginDeleted"));
+			queryClient.invalidateQueries({ queryKey: ["claude-plugins"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(i18n.t("toast.pluginDeleteFailed", { error: errorMessage }));
+		},
+	});
+};
+
+// Sync workspace from current ~/.claude state
+export const useSyncWorkspaceFromClaude = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (storeId: string) =>
+			invoke<void>("sync_workspace_from_claude", { storeId }),
+		onSuccess: () => {
+			toast.success(i18n.t("toast.workspaceSynced"));
+			queryClient.invalidateQueries({ queryKey: ["stores"] });
+			queryClient.invalidateQueries({ queryKey: ["current-store"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(i18n.t("toast.workspaceSyncFailed", { error: errorMessage }));
 		},
 	});
 };

@@ -3,6 +3,8 @@ import { Layout } from "./components/Layout";
 import { RouteWrapper } from "./components/RouteWrapper";
 import { AgentsPage } from "./pages/AgentsPage";
 import { CommandsPage } from "./pages/CommandsPage";
+import { PluginsPage } from "./pages/PluginsPage";
+import { SkillsPage } from "./pages/SkillsPage";
 import { ConfigEditorPage } from "./pages/ConfigEditorPage";
 import { ConfigSwitcherPage } from "./pages/ConfigSwitcherPage";
 import { MCPPage } from "./pages/MCPPage";
@@ -64,6 +66,14 @@ const router = createBrowserRouter([
 				),
 			},
 			{
+				path: "skills",
+				element: (
+					<RouteWrapper>
+						<SkillsPage />
+					</RouteWrapper>
+				),
+			},
+			{
 				path: "usage",
 				element: (
 					<RouteWrapper>
@@ -92,6 +102,14 @@ const router = createBrowserRouter([
 				element: (
 					<RouteWrapper>
 						<CommandsPage />
+					</RouteWrapper>
+				),
+			},
+			{
+				path: "plugins",
+				element: (
+					<RouteWrapper>
+						<PluginsPage />
 					</RouteWrapper>
 				),
 			},

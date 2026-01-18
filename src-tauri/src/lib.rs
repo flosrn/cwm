@@ -205,7 +205,15 @@ pub fn run() {
             delete_claude_command,
             read_claude_agents,
             write_claude_agent,
-            delete_claude_agent
+            delete_claude_agent,
+            read_claude_skills,
+            write_claude_skill,
+            delete_claude_skill,
+            sync_workspace_from_claude,
+            refresh_workspace_counts,
+            read_claude_plugins,
+            toggle_plugin,
+            delete_local_plugin
         ])
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]

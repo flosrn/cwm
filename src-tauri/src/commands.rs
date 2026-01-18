@@ -4,9 +4,57 @@ use tauri_plugin_updater::UpdaterExt;
 use reqwest;
 use uuid::Uuid;
 use nanoid;
+use fs_extra::dir::{copy as copy_dir, CopyOptions};
 
 // Application configuration directory
 const APP_CONFIG_DIR: &str = ".ccconfig";
+const WORKSPACES_DIR: &str = "workspaces";
+const BACKUPS_DIR: &str = "backups";
+
+// Directories to EXCLUDE when copying ~/.claude to workspace (session-specific, caches)
+const EXCLUDED_DIRS: &[&str] = &[
+    "debug",           // Debug logs (volumineux)
+    "file-history",    // File history
+    "session-env",     // Session variables
+    "shell-snapshots", // Shell snapshots
+    "todos",           // Todos (session-specific)
+    "telemetry",       // Telemetry data
+    "statsig",         // Feature flags
+    "projects",        // Project state
+    "paste-cache",     // Paste cache
+    ".git",            // Git repo
+    "history.jsonl",   // Conversation history
+    "tool-usage.log",  // Tool usage log
+    "stats-cache.json", // Stats cache
+    "cache",           // General cache
+];
+
+// Directories to ALWAYS include when copying
+const ALWAYS_INCLUDED_DIRS: &[&str] = &[
+    "skills",
+    "commands",
+    "agents",
+    "rules",
+    "plugins",
+    "docs",
+    "chrome",
+    "song",
+];
+
+// Files to always include
+const INCLUDED_FILES: &[&str] = &[
+    "settings.json",
+    "CLAUDE.md",
+    ".mcp.json",
+];
+
+// Workspace type enum
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceType {
+    SettingsOnly,    // Original CC Mate behavior: only merge settings.json
+    FullDirectory,   // New: switch complete ~/.claude directory
+}
 
 pub async fn initialize_app_config() -> Result<(), String> {
     println!("initialize_app_config called");
@@ -73,6 +121,30 @@ pub struct ConfigStore {
     pub created_at: u64,
     pub settings: Value,
     pub using: bool,
+
+    // NEW: Workspace support
+    #[serde(rename = "workspaceType", default = "default_workspace_type")]
+    pub workspace_type: WorkspaceType,
+    #[serde(rename = "workspacePath", skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    #[serde(rename = "includeScripts", default)]
+    pub include_scripts: bool,
+
+    // Metadata for full directory workspaces
+    #[serde(rename = "skillsCount", skip_serializing_if = "Option::is_none")]
+    pub skills_count: Option<u32>,
+    #[serde(rename = "commandsCount", skip_serializing_if = "Option::is_none")]
+    pub commands_count: Option<u32>,
+    #[serde(rename = "agentsCount", skip_serializing_if = "Option::is_none")]
+    pub agents_count: Option<u32>,
+    #[serde(rename = "pluginsCount", skip_serializing_if = "Option::is_none")]
+    pub plugins_count: Option<u32>,
+    #[serde(rename = "lastSynced", skip_serializing_if = "Option::is_none")]
+    pub last_synced: Option<u64>,
+}
+
+fn default_workspace_type() -> WorkspaceType {
+    WorkspaceType::SettingsOnly
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -263,6 +335,405 @@ pub async fn backup_claude_configs() -> Result<(), String> {
     backup_claude_configs_internal(&app_config_path, &claude_dir)
 }
 
+// ============================================================================
+// WORKSPACE DIRECTORY OPERATIONS
+// ============================================================================
+
+/// Count items in a directory (skills, commands, agents)
+fn count_directory_items(dir_path: &std::path::Path) -> u32 {
+    if !dir_path.exists() {
+        return 0;
+    }
+
+    std::fs::read_dir(dir_path)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path().is_file() &&
+                    e.path().extension().map(|ext| ext == "md").unwrap_or(false)
+                })
+                .count() as u32
+        })
+        .unwrap_or(0)
+}
+
+/// Count subdirectories in a directory (for plugins which are folders, not .md files)
+fn count_subdirectories(dir_path: &std::path::Path) -> u32 {
+    if !dir_path.exists() {
+        return 0;
+    }
+
+    std::fs::read_dir(dir_path)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let path = e.path();
+                    let name = e.file_name();
+                    let name_str = name.to_string_lossy();
+                    // Count directories that don't start with '.'
+                    path.is_dir() && !name_str.starts_with('.')
+                })
+                .count() as u32
+        })
+        .unwrap_or(0)
+}
+
+/// Count workspace items (skills, commands, agents, plugins)
+fn count_workspace_items(workspace_path: &str) -> Result<(Option<u32>, Option<u32>, Option<u32>, Option<u32>), String> {
+    let path = std::path::Path::new(workspace_path);
+
+    // Skills are directories (each skill is a folder with SKILL.md inside)
+    let skills_count = count_subdirectories(&path.join("skills"));
+    // Commands and agents are .md files directly in the directory
+    let commands_count = count_directory_items(&path.join("commands"));
+    let agents_count = count_directory_items(&path.join("agents"));
+    // Plugins are directories, not .md files
+    let plugins_count = count_subdirectories(&path.join("plugins/local"));
+
+    Ok((Some(skills_count), Some(commands_count), Some(agents_count), Some(plugins_count)))
+}
+
+/// Check if a path should be excluded from copying
+fn should_exclude(path: &std::path::Path, include_scripts: bool) -> bool {
+    let file_name = path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    // Check if it's in the excluded list
+    if EXCLUDED_DIRS.contains(&file_name) {
+        return true;
+    }
+
+    // Handle scripts directory based on user preference
+    if file_name == "scripts" && !include_scripts {
+        return true;
+    }
+
+    false
+}
+
+/// Copy ~/.claude directory to workspace with exclusions
+fn copy_claude_to_workspace(workspace_id: &str, include_scripts: bool) -> Result<String, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+    let app_config_path = home_dir.join(APP_CONFIG_DIR);
+    let workspaces_path = app_config_path.join(WORKSPACES_DIR);
+    let workspace_path = workspaces_path.join(format!("ws_{}", workspace_id));
+
+    // Ensure workspaces directory exists
+    std::fs::create_dir_all(&workspaces_path)
+        .map_err(|e| format!("Failed to create workspaces directory: {}", e))?;
+
+    // Create workspace directory
+    std::fs::create_dir_all(&workspace_path)
+        .map_err(|e| format!("Failed to create workspace directory: {}", e))?;
+
+    if !claude_dir.exists() {
+        println!("Claude directory does not exist, creating empty workspace");
+        return Ok(workspace_path.to_string_lossy().to_string());
+    }
+
+    // Copy files and directories with exclusions
+    for entry in std::fs::read_dir(&claude_dir)
+        .map_err(|e| format!("Failed to read Claude directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let source_path = entry.path();
+        let file_name = source_path.file_name().ok_or("Invalid file name")?;
+
+        // Check if this should be excluded
+        if should_exclude(&source_path, include_scripts) {
+            println!("Excluding: {}", source_path.display());
+            continue;
+        }
+
+        let dest_path = workspace_path.join(file_name);
+
+        if source_path.is_file() {
+            std::fs::copy(&source_path, &dest_path)
+                .map_err(|e| format!("Failed to copy file {}: {}", source_path.display(), e))?;
+            println!("Copied file: {}", file_name.to_string_lossy());
+        } else if source_path.is_dir() {
+            // Use fs_extra for recursive directory copy
+            let mut options = CopyOptions::new();
+            options.overwrite = true;
+            options.copy_inside = true;
+
+            copy_dir(&source_path, &workspace_path, &options)
+                .map_err(|e| format!("Failed to copy directory {}: {}", source_path.display(), e))?;
+            println!("Copied directory: {}", file_name.to_string_lossy());
+        }
+    }
+
+    println!("Workspace created at: {}", workspace_path.display());
+    Ok(workspace_path.to_string_lossy().to_string())
+}
+
+/// Copy workspace back to ~/.claude
+fn copy_workspace_to_claude(workspace_path: &str) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+    let workspace = std::path::Path::new(workspace_path);
+
+    if !workspace.exists() {
+        return Err(format!("Workspace path does not exist: {}", workspace_path));
+    }
+
+    // Ensure .claude directory exists
+    std::fs::create_dir_all(&claude_dir)
+        .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
+
+    // Copy files from workspace to ~/.claude
+    for entry in std::fs::read_dir(workspace)
+        .map_err(|e| format!("Failed to read workspace directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let source_path = entry.path();
+        let file_name = source_path.file_name().ok_or("Invalid file name")?;
+        let dest_path = claude_dir.join(file_name);
+
+        if source_path.is_file() {
+            std::fs::copy(&source_path, &dest_path)
+                .map_err(|e| format!("Failed to copy file {}: {}", source_path.display(), e))?;
+            println!("Restored file: {}", file_name.to_string_lossy());
+        } else if source_path.is_dir() {
+            // Remove existing directory first to avoid conflicts
+            if dest_path.exists() {
+                std::fs::remove_dir_all(&dest_path)
+                    .map_err(|e| format!("Failed to remove existing directory {}: {}", dest_path.display(), e))?;
+            }
+
+            // Use fs_extra for recursive directory copy
+            let mut options = CopyOptions::new();
+            options.overwrite = true;
+            options.copy_inside = true;
+
+            copy_dir(&source_path, &claude_dir, &options)
+                .map_err(|e| format!("Failed to copy directory {}: {}", source_path.display(), e))?;
+            println!("Restored directory: {}", file_name.to_string_lossy());
+        }
+    }
+
+    println!("Workspace restored to ~/.claude");
+    Ok(())
+}
+
+/// Clear ~/.claude directory for switch (preserving session-specific items)
+fn clear_claude_dir_for_switch() -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+
+    if !claude_dir.exists() {
+        return Ok(());
+    }
+
+    // Only remove items that are managed by workspaces
+    let items_to_clear = vec![
+        "settings.json",
+        "CLAUDE.md",
+        ".mcp.json",
+        "skills",
+        "commands",
+        "agents",
+        "rules",
+        "plugins",
+        "docs",
+        "chrome",
+        "song",
+        "scripts",  // Clear scripts if workspace manages them
+    ];
+
+    for item in items_to_clear {
+        let item_path = claude_dir.join(item);
+        if item_path.exists() {
+            if item_path.is_file() {
+                std::fs::remove_file(&item_path)
+                    .map_err(|e| format!("Failed to remove file {}: {}", item, e))?;
+            } else if item_path.is_dir() {
+                std::fs::remove_dir_all(&item_path)
+                    .map_err(|e| format!("Failed to remove directory {}: {}", item, e))?;
+            }
+            println!("Cleared: {}", item);
+        }
+    }
+
+    Ok(())
+}
+
+/// Create timestamped backup before switching workspace
+fn backup_current_claude_dir() -> Result<String, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+    let app_config_path = home_dir.join(APP_CONFIG_DIR);
+    let backups_path = app_config_path.join(BACKUPS_DIR);
+
+    // Create timestamp-based backup directory
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let backup_path = backups_path.join(format!("backup_{}", timestamp));
+
+    // Ensure backups directory exists
+    std::fs::create_dir_all(&backups_path)
+        .map_err(|e| format!("Failed to create backups directory: {}", e))?;
+
+    if !claude_dir.exists() {
+        println!("No .claude directory to backup");
+        return Ok(backup_path.to_string_lossy().to_string());
+    }
+
+    // Create backup directory
+    std::fs::create_dir_all(&backup_path)
+        .map_err(|e| format!("Failed to create backup directory: {}", e))?;
+
+    // Copy claude directory to backup (only managed items)
+    for entry in std::fs::read_dir(&claude_dir)
+        .map_err(|e| format!("Failed to read Claude directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let source_path = entry.path();
+        let file_name = source_path.file_name().ok_or("Invalid file name")?;
+
+        // Only backup items that we manage
+        if should_exclude(&source_path, true) {
+            continue;
+        }
+
+        let dest_path = backup_path.join(file_name);
+
+        if source_path.is_file() {
+            std::fs::copy(&source_path, &dest_path)
+                .map_err(|e| format!("Failed to backup file {}: {}", source_path.display(), e))?;
+        } else if source_path.is_dir() {
+            let mut options = CopyOptions::new();
+            options.overwrite = true;
+            options.copy_inside = true;
+
+            copy_dir(&source_path, &backup_path, &options)
+                .map_err(|e| format!("Failed to backup directory {}: {}", source_path.display(), e))?;
+        }
+    }
+
+    println!("Backup created at: {}", backup_path.display());
+    Ok(backup_path.to_string_lossy().to_string())
+}
+
+/// Sync workspace from current ~/.claude state (update workspace with current state)
+#[tauri::command]
+pub async fn sync_workspace_from_claude(store_id: String) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let app_config_path = home_dir.join(APP_CONFIG_DIR);
+    let stores_file = app_config_path.join("stores.json");
+
+    if !stores_file.exists() {
+        return Err("Stores file does not exist".to_string());
+    }
+
+    // Read stores
+    let content = std::fs::read_to_string(&stores_file)
+        .map_err(|e| format!("Failed to read stores file: {}", e))?;
+
+    let mut stores_data: StoresData = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse stores file: {}", e))?;
+
+    // Find the store
+    let store = stores_data.configs.iter_mut()
+        .find(|s| s.id == store_id)
+        .ok_or("Store not found")?;
+
+    if store.workspace_type != WorkspaceType::FullDirectory {
+        return Err("Cannot sync a settings-only workspace".to_string());
+    }
+
+    let workspace_path = store.workspace_path.as_ref()
+        .ok_or("Workspace path not found")?;
+
+    // Remove old workspace and recreate
+    let workspace_dir = std::path::Path::new(workspace_path);
+    if workspace_dir.exists() {
+        std::fs::remove_dir_all(workspace_dir)
+            .map_err(|e| format!("Failed to remove old workspace: {}", e))?;
+    }
+
+    // Copy current ~/.claude to workspace
+    let new_path = copy_claude_to_workspace(&store_id, store.include_scripts)?;
+
+    // Update metadata
+    let (skills, commands, agents, plugins) = count_workspace_items(&new_path)?;
+    store.workspace_path = Some(new_path);
+    store.skills_count = skills;
+    store.commands_count = commands;
+    store.agents_count = agents;
+    store.plugins_count = plugins;
+    store.last_synced = Some(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| format!("Failed to get timestamp: {}", e))?
+            .as_secs()
+    );
+
+    // Write back
+    let json_content = serde_json::to_string_pretty(&stores_data)
+        .map_err(|e| format!("Failed to serialize stores: {}", e))?;
+
+    std::fs::write(&stores_file, json_content)
+        .map_err(|e| format!("Failed to write stores file: {}", e))?;
+
+    println!("Workspace synced successfully");
+    Ok(())
+}
+
+/// Refresh workspace item counts without copying files from ~/.claude
+/// This recalculates counts from the existing workspace directory
+#[tauri::command]
+pub async fn refresh_workspace_counts(store_id: String) -> Result<ConfigStore, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let app_config_path = home_dir.join(APP_CONFIG_DIR);
+    let stores_file = app_config_path.join("stores.json");
+
+    if !stores_file.exists() {
+        return Err("Stores file does not exist".to_string());
+    }
+
+    // Read stores
+    let content = std::fs::read_to_string(&stores_file)
+        .map_err(|e| format!("Failed to read stores file: {}", e))?;
+
+    let mut stores_data: StoresData = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse stores file: {}", e))?;
+
+    // Find the store
+    let store = stores_data.configs.iter_mut()
+        .find(|s| s.id == store_id)
+        .ok_or("Store not found")?;
+
+    if store.workspace_type != WorkspaceType::FullDirectory {
+        return Err("Cannot refresh counts for a settings-only workspace".to_string());
+    }
+
+    let workspace_path = store.workspace_path.as_ref()
+        .ok_or("Workspace path not found")?;
+
+    // Recalculate counts from existing workspace (no file copying!)
+    let (skills, commands, agents, plugins) = count_workspace_items(workspace_path)?;
+    store.skills_count = skills;
+    store.commands_count = commands;
+    store.agents_count = agents;
+    store.plugins_count = plugins;
+
+    let updated_store = store.clone();
+
+    // Write back
+    let json_content = serde_json::to_string_pretty(&stores_data)
+        .map_err(|e| format!("Failed to serialize stores: {}", e))?;
+
+    std::fs::write(&stores_file, json_content)
+        .map_err(|e| format!("Failed to write stores file: {}", e))?;
+
+    println!("Workspace counts refreshed successfully for {}", store_id);
+    Ok(updated_store)
+}
+
 // Store management functions
 
 #[tauri::command]
@@ -282,20 +753,47 @@ pub async fn get_stores() -> Result<Vec<ConfigStore>, String> {
         .map_err(|e| format!("Failed to parse stores file: {}", e))?;
 
     // Add default notification settings if they don't exist
+    let mut needs_save = false;
     if stores_data.notification.is_none() {
         stores_data.notification = Some(NotificationSettings {
             enable: true,
             enabled_hooks: vec!["Notification".to_string()],
         });
+        needs_save = true;
+        println!("Added default notification settings to existing stores.json");
+    }
 
-        // Write back to stores file with notification settings added
+    // Auto-refresh counts for FullDirectory workspaces missing any count (migration)
+    for store in stores_data.configs.iter_mut() {
+        let needs_refresh = store.workspace_type == WorkspaceType::FullDirectory
+            && store.workspace_path.is_some()
+            && (store.skills_count.is_none()
+                || store.commands_count.is_none()
+                || store.agents_count.is_none()
+                || store.plugins_count.is_none());
+
+        if needs_refresh {
+            if let Some(ref workspace_path) = store.workspace_path {
+                if let Ok((skills, commands, agents, plugins)) = count_workspace_items(workspace_path) {
+                    store.skills_count = skills;
+                    store.commands_count = commands;
+                    store.agents_count = agents;
+                    store.plugins_count = plugins;
+                    needs_save = true;
+                    println!("Auto-refreshed counts for workspace: {} (skills: {:?}, cmds: {:?}, agents: {:?}, plugins: {:?})",
+                        store.id, skills, commands, agents, plugins);
+                }
+            }
+        }
+    }
+
+    // Write back if any changes were made
+    if needs_save {
         let json_content = serde_json::to_string_pretty(&stores_data)
             .map_err(|e| format!("Failed to serialize stores: {}", e))?;
 
         std::fs::write(&stores_file, json_content)
             .map_err(|e| format!("Failed to write stores file: {}", e))?;
-
-        println!("Added default notification settings to existing stores.json");
     }
 
     let mut stores_vec = stores_data.configs;
@@ -310,10 +808,20 @@ pub async fn create_config(
     id: String,
     title: String,
     settings: Value,
+    // NEW: Workspace type parameters
+    workspace_type: Option<String>,  // "settings_only" | "full_directory"
+    include_scripts: Option<bool>,
 ) -> Result<ConfigStore, String> {
     let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
     let app_config_path = home_dir.join(APP_CONFIG_DIR);
     let stores_file = app_config_path.join("stores.json");
+
+    // Parse workspace type
+    let ws_type = match workspace_type.as_deref() {
+        Some("full_directory") => WorkspaceType::FullDirectory,
+        _ => WorkspaceType::SettingsOnly,
+    };
+    let include_scripts_flag = include_scripts.unwrap_or(false);
 
     // Ensure app config directory exists
     std::fs::create_dir_all(&app_config_path)
@@ -351,19 +859,40 @@ pub async fn create_config(
             let settings_json: Value = serde_json::from_str(&settings_content)
                 .map_err(|e| format!("Failed to parse existing Claude settings: {}", e))?;
 
-            // Create an Original Config store with existing settings
+            // Create an Original Config store with existing settings (as full directory if first is full directory)
+            let (orig_ws_path, orig_skills, orig_commands, orig_agents, orig_plugins) = if ws_type == WorkspaceType::FullDirectory {
+                let orig_id = nanoid::nanoid!(6);
+                let path = copy_claude_to_workspace(&orig_id, include_scripts_flag)?;
+                let (s, c, a, p) = count_workspace_items(&path)?;
+                (Some(path), s, c, a, p)
+            } else {
+                (None, None, None, None, None)
+            };
+
             let original_store = ConfigStore {
-                id: nanoid::nanoid!(6), // Generate a 6-character ID
+                id: nanoid::nanoid!(6),
                 title: "Original Config".to_string(),
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|e| format!("Failed to get timestamp: {}", e))?
                     .as_secs(),
                 settings: settings_json,
-                using: false, // Original Config should not be active by default
+                using: false,
+                workspace_type: ws_type.clone(),
+                workspace_path: orig_ws_path,
+                include_scripts: include_scripts_flag,
+                skills_count: orig_skills,
+                commands_count: orig_commands,
+                agents_count: orig_agents,
+                plugins_count: orig_plugins,
+                last_synced: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|e| format!("Failed to get timestamp: {}", e))?
+                        .as_secs()
+                ),
             };
 
-            // Add the Original Config store to the collection
             stores_data.configs.push(original_store);
             println!("Created Original Config store from existing settings.json");
         }
@@ -413,6 +942,15 @@ pub async fn create_config(
             .map_err(|e| format!("Failed to write user settings: {}", e))?;
     }
 
+    // For full directory workspace, copy current ~/.claude
+    let (workspace_path, skills_count, commands_count, agents_count, plugins_count) = if ws_type == WorkspaceType::FullDirectory {
+        let path = copy_claude_to_workspace(&id, include_scripts_flag)?;
+        let (s, c, a, p) = count_workspace_items(&path)?;
+        (Some(path), s, c, a, p)
+    } else {
+        (None, None, None, None, None)
+    };
+
     // Create new store
     let new_store = ConfigStore {
         id: id.clone(),
@@ -423,6 +961,19 @@ pub async fn create_config(
             .as_secs(),
         settings,
         using: should_be_active,
+        workspace_type: ws_type,
+        workspace_path,
+        include_scripts: include_scripts_flag,
+        skills_count,
+        commands_count,
+        agents_count,
+        plugins_count,
+        last_synced: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| format!("Failed to get timestamp: {}", e))?
+                .as_secs()
+        ),
     };
 
     // Add store to collection
@@ -496,64 +1047,79 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to parse stores file: {}", e))?;
 
     // Find the store and check if it exists
-    let store_found = stores_data.configs.iter().any(|store| store.id == store_id);
-    if !store_found {
-        return Err("Store not found".to_string());
-    }
+    let selected_store = stores_data.configs.iter()
+        .find(|store| store.id == store_id)
+        .cloned()
+        .ok_or("Store not found")?;
 
-    // Set all stores to not using, then set the selected one to using
-    let mut selected_store_settings: Option<Value> = None;
-    for store in &mut stores_data.configs {
-        if store.id == store_id {
-            store.using = true;
-            selected_store_settings = Some(store.settings.clone());
-        } else {
-            store.using = false;
-        }
-    }
+    // Handle switching based on workspace type
+    match selected_store.workspace_type {
+        WorkspaceType::FullDirectory => {
+            println!("Switching to full directory workspace: {}", selected_store.title);
 
-    // Write the selected store's settings to the user's actual settings.json with partial update
-    if let Some(settings) = selected_store_settings {
-        let user_settings_path = home_dir.join(".claude/settings.json");
+            // 1. Backup current ~/.claude before switch
+            let backup_path = backup_current_claude_dir()?;
+            println!("Created backup at: {}", backup_path);
 
-        // Create .claude directory if it doesn't exist
-        if let Some(parent) = user_settings_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
-        }
+            // 2. Clear ~/.claude (managed items only)
+            clear_claude_dir_for_switch()?;
+            println!("Cleared ~/.claude for switch");
 
-        // Read existing settings if file exists, otherwise start with empty object
-        let mut existing_settings = if user_settings_path.exists() {
-            let content = std::fs::read_to_string(&user_settings_path)
-                .map_err(|e| format!("Failed to read existing settings: {}", e))?;
-            serde_json::from_str(&content)
-                .map_err(|e| format!("Failed to parse existing settings: {}", e))?
-        } else {
-            serde_json::Value::Object(serde_json::Map::new())
-        };
+            // 3. Copy workspace to ~/.claude
+            if let Some(workspace_path) = &selected_store.workspace_path {
+                copy_workspace_to_claude(workspace_path)?;
+                println!("Restored workspace from: {}", workspace_path);
+            } else {
+                return Err("Workspace path not found for full directory workspace".to_string());
+            }
+        },
+        WorkspaceType::SettingsOnly => {
+            println!("Switching to settings-only workspace: {}", selected_store.title);
 
-        // Merge the new settings into existing settings (partial update)
-        if let Some(settings_obj) = settings.as_object() {
-            if let Some(existing_obj) = existing_settings.as_object_mut() {
-                // Update only the keys present in the stored settings
-                for (key, value) in settings_obj {
-                    existing_obj.insert(key.clone(), value.clone());
+            // Original CC Mate behavior: merge settings.json
+            let user_settings_path = home_dir.join(".claude/settings.json");
+
+            // Create .claude directory if it doesn't exist
+            if let Some(parent) = user_settings_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
+            }
+
+            // Read existing settings if file exists, otherwise start with empty object
+            let mut existing_settings = if user_settings_path.exists() {
+                let content = std::fs::read_to_string(&user_settings_path)
+                    .map_err(|e| format!("Failed to read existing settings: {}", e))?;
+                serde_json::from_str(&content)
+                    .map_err(|e| format!("Failed to parse existing settings: {}", e))?
+            } else {
+                serde_json::Value::Object(serde_json::Map::new())
+            };
+
+            // Merge the new settings into existing settings (partial update)
+            if let Some(settings_obj) = selected_store.settings.as_object() {
+                if let Some(existing_obj) = existing_settings.as_object_mut() {
+                    for (key, value) in settings_obj {
+                        existing_obj.insert(key.clone(), value.clone());
+                    }
+                } else {
+                    existing_settings = selected_store.settings.clone();
                 }
             } else {
-                // If existing settings is not an object, replace it entirely
-                existing_settings = settings.clone();
+                existing_settings = selected_store.settings.clone();
             }
-        } else {
-            // If stored settings is not an object, replace existing entirely
-            existing_settings = settings.clone();
+
+            // Write the merged settings back to file
+            let json_content = serde_json::to_string_pretty(&existing_settings)
+                .map_err(|e| format!("Failed to serialize merged settings: {}", e))?;
+
+            std::fs::write(&user_settings_path, json_content)
+                .map_err(|e| format!("Failed to write user settings: {}", e))?;
         }
+    }
 
-        // Write the merged settings back to file
-        let json_content = serde_json::to_string_pretty(&existing_settings)
-            .map_err(|e| format!("Failed to serialize merged settings: {}", e))?;
-
-        std::fs::write(&user_settings_path, json_content)
-            .map_err(|e| format!("Failed to write user settings: {}", e))?;
+    // Update the using flag for all stores
+    for store in &mut stores_data.configs {
+        store.using = store.id == store_id;
     }
 
     // Write back to stores file
@@ -563,6 +1129,7 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
     std::fs::write(&stores_file, json_content)
         .map_err(|e| format!("Failed to write stores file: {}", e))?;
 
+    println!("✅ Workspace switch completed successfully");
     Ok(())
 }
 
@@ -2064,6 +2631,368 @@ pub async fn delete_claude_agent(agent_name: String) -> Result<(), String> {
         std::fs::remove_file(&agent_file_path)
             .map_err(|e| format!("Failed to delete agent file: {}", e))?;
     }
+
+    Ok(())
+}
+
+// Skill management
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct SkillFile {
+    pub name: String,
+    pub content: String,  // Content of SKILL.md
+    pub references_count: u32,  // Number of files in references/ directory
+}
+
+#[tauri::command]
+pub async fn read_claude_skills() -> Result<Vec<SkillFile>, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let skills_dir = home_dir.join(".claude/skills");
+
+    if !skills_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut skill_files = Vec::new();
+
+    // Read all directories in the skills directory
+    let entries = std::fs::read_dir(&skills_dir)
+        .map_err(|e| format!("Failed to read skills directory: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            let skill_name = path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            // Read SKILL.md content
+            let skill_md_path = path.join("SKILL.md");
+            let content = if skill_md_path.exists() {
+                std::fs::read_to_string(&skill_md_path)
+                    .unwrap_or_else(|_| String::new())
+            } else {
+                String::new()
+            };
+
+            // Count references
+            let references_dir = path.join("references");
+            let references_count = if references_dir.exists() {
+                std::fs::read_dir(&references_dir)
+                    .map(|entries| entries.count() as u32)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            skill_files.push(SkillFile {
+                name: skill_name,
+                content,
+                references_count,
+            });
+        }
+    }
+
+    // Sort skills alphabetically by name
+    skill_files.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(skill_files)
+}
+
+#[tauri::command]
+pub async fn write_claude_skill(skill_name: String, content: String) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let skill_dir = home_dir.join(".claude/skills").join(&skill_name);
+    let skill_file_path = skill_dir.join("SKILL.md");
+
+    // Ensure skill directory exists
+    std::fs::create_dir_all(&skill_dir)
+        .map_err(|e| format!("Failed to create skill directory: {}", e))?;
+
+    std::fs::write(&skill_file_path, content)
+        .map_err(|e| format!("Failed to write skill file: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_claude_skill(skill_name: String) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let skill_dir = home_dir.join(".claude/skills").join(&skill_name);
+
+    if skill_dir.exists() {
+        std::fs::remove_dir_all(&skill_dir)
+            .map_err(|e| format!("Failed to delete skill directory: {}", e))?;
+    }
+
+    Ok(())
+}
+
+// ==================== Plugin Management ====================
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct PluginInfo {
+    pub name: String,
+    pub path: String,
+    pub is_local: bool,
+    pub is_enabled: bool,
+    pub has_mcp: bool,
+    pub commands_count: u32,
+    pub agents_count: u32,
+    pub skills_count: u32,
+    pub description: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+pub struct InstalledPlugins {
+    pub version: u32,
+    pub plugins: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct PluginMetadata {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub version: Option<String>,
+}
+
+fn count_files_in_dir(dir: &std::path::Path) -> u32 {
+    if !dir.exists() {
+        return 0;
+    }
+    std::fs::read_dir(dir)
+        .map(|entries| entries.filter_map(|e| e.ok()).count() as u32)
+        .unwrap_or(0)
+}
+
+fn read_plugin_description(plugin_path: &std::path::Path) -> Option<String> {
+    // Try to read from .claude-plugin/plugin.json
+    let plugin_json_path = plugin_path.join(".claude-plugin/plugin.json");
+    if plugin_json_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&plugin_json_path) {
+            if let Ok(metadata) = serde_json::from_str::<PluginMetadata>(&content) {
+                return metadata.description;
+            }
+        }
+    }
+
+    // Try to read first line of README.md
+    let readme_path = plugin_path.join("README.md");
+    if readme_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&readme_path) {
+            // Get first non-empty, non-header line
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                    return Some(trimmed.chars().take(100).collect());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn get_installed_plugins() -> Result<InstalledPlugins, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let installed_path = home_dir.join(".claude/plugins/installed_plugins.json");
+
+    if !installed_path.exists() {
+        return Ok(InstalledPlugins::default());
+    }
+
+    let content = std::fs::read_to_string(&installed_path)
+        .map_err(|e| format!("Failed to read installed_plugins.json: {}", e))?;
+
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse installed_plugins.json: {}", e))
+}
+
+fn save_installed_plugins(installed: &InstalledPlugins) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let installed_path = home_dir.join(".claude/plugins/installed_plugins.json");
+
+    let content = serde_json::to_string_pretty(installed)
+        .map_err(|e| format!("Failed to serialize installed_plugins.json: {}", e))?;
+
+    std::fs::write(&installed_path, content)
+        .map_err(|e| format!("Failed to write installed_plugins.json: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn read_claude_plugins() -> Result<Vec<PluginInfo>, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let plugins_dir = home_dir.join(".claude/plugins");
+
+    if !plugins_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let installed = get_installed_plugins()?;
+    let mut plugins = Vec::new();
+
+    // Read local plugins
+    let local_dir = plugins_dir.join("local");
+    if local_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&local_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() {
+                    let plugin_name = path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    let has_mcp = path.join(".mcp.json").exists();
+                    let commands_count = count_files_in_dir(&path.join("commands"));
+                    let agents_count = count_files_in_dir(&path.join("agents"));
+                    let skills_count = count_files_in_dir(&path.join("skills"));
+                    let description = read_plugin_description(&path);
+
+                    // Check if enabled (local plugins are enabled by default if not in disabled list)
+                    let plugin_key = format!("local/{}", plugin_name);
+                    let is_enabled = !installed.plugins.contains_key(&plugin_key)
+                        || installed.plugins.get(&plugin_key)
+                            .and_then(|v| v.get("enabled"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(true);
+
+                    plugins.push(PluginInfo {
+                        name: plugin_name,
+                        path: path.to_string_lossy().to_string(),
+                        is_local: true,
+                        is_enabled,
+                        has_mcp,
+                        commands_count,
+                        agents_count,
+                        skills_count,
+                        description,
+                    });
+                }
+            }
+        }
+    }
+
+    // Read marketplace plugins
+    let marketplaces_dir = plugins_dir.join("marketplaces");
+    if marketplaces_dir.exists() {
+        if let Ok(marketplace_entries) = std::fs::read_dir(&marketplaces_dir) {
+            for marketplace_entry in marketplace_entries.filter_map(|e| e.ok()) {
+                let marketplace_path = marketplace_entry.path();
+                if marketplace_path.is_dir() {
+                    let marketplace_name = marketplace_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+
+                    // Each marketplace directory contains plugin directories
+                    if let Ok(plugin_entries) = std::fs::read_dir(&marketplace_path) {
+                        for plugin_entry in plugin_entries.filter_map(|e| e.ok()) {
+                            let path = plugin_entry.path();
+                            if path.is_dir() {
+                                let plugin_name = path.file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+
+                                let has_mcp = path.join(".mcp.json").exists();
+                                let commands_count = count_files_in_dir(&path.join("commands"));
+                                let agents_count = count_files_in_dir(&path.join("agents"));
+                                let skills_count = count_files_in_dir(&path.join("skills"));
+                                let description = read_plugin_description(&path);
+
+                                let plugin_key = format!("marketplaces/{}/{}", marketplace_name, plugin_name);
+                                let is_enabled = !installed.plugins.contains_key(&plugin_key)
+                                    || installed.plugins.get(&plugin_key)
+                                        .and_then(|v| v.get("enabled"))
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(true);
+
+                                plugins.push(PluginInfo {
+                                    name: format!("{}/{}", marketplace_name, plugin_name),
+                                    path: path.to_string_lossy().to_string(),
+                                    is_local: false,
+                                    is_enabled,
+                                    has_mcp,
+                                    commands_count,
+                                    agents_count,
+                                    skills_count,
+                                    description,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort plugins: local first, then alphabetically
+    plugins.sort_by(|a, b| {
+        match (a.is_local, b.is_local) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.cmp(&b.name),
+        }
+    });
+
+    Ok(plugins)
+}
+
+#[tauri::command]
+pub async fn toggle_plugin(plugin_path: String, enabled: bool) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let plugins_base = home_dir.join(".claude/plugins");
+
+    // Determine the plugin key from path
+    let path = std::path::Path::new(&plugin_path);
+    let plugin_key = if plugin_path.contains("/local/") {
+        let plugin_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Invalid plugin path")?;
+        format!("local/{}", plugin_name)
+    } else if plugin_path.contains("/marketplaces/") {
+        // Extract marketplace/plugin_name from path
+        let relative = path.strip_prefix(&plugins_base.join("marketplaces"))
+            .map_err(|_| "Invalid marketplace plugin path")?;
+        format!("marketplaces/{}", relative.to_string_lossy())
+    } else {
+        return Err("Unknown plugin type".to_string());
+    };
+
+    let mut installed = get_installed_plugins()?;
+
+    installed.plugins.insert(
+        plugin_key,
+        serde_json::json!({ "enabled": enabled }),
+    );
+
+    save_installed_plugins(&installed)?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_local_plugin(plugin_name: String) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let plugin_dir = home_dir.join(".claude/plugins/local").join(&plugin_name);
+
+    if !plugin_dir.exists() {
+        return Err(format!("Plugin '{}' not found", plugin_name));
+    }
+
+    std::fs::remove_dir_all(&plugin_dir)
+        .map_err(|e| format!("Failed to delete plugin: {}", e))?;
+
+    // Remove from installed_plugins.json if present
+    let mut installed = get_installed_plugins()?;
+    let plugin_key = format!("local/{}", plugin_name);
+    installed.plugins.remove(&plugin_key);
+    save_installed_plugins(&installed)?;
 
     Ok(())
 }
