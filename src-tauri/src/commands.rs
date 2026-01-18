@@ -618,6 +618,167 @@ fn backup_current_claude_dir() -> Result<String, String> {
     Ok(backup_path.to_string_lossy().to_string())
 }
 
+// ============================================================================
+// Git Helper Functions for Workspace Branch Management
+// ============================================================================
+
+/// Check if ~/.claude is a git repository
+fn git_is_repo() -> Result<bool, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+    let git_dir = claude_dir.join(".git");
+    Ok(git_dir.exists())
+}
+
+/// Get current git branch name
+fn git_current_branch() -> Result<String, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git command: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git command failed: {}", stderr));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Check if there are uncommitted changes (staged or unstaged)
+fn git_has_changes() -> Result<bool, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git status: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git status failed: {}", stderr));
+    }
+
+    let status = String::from_utf8_lossy(&output.stdout);
+    Ok(!status.trim().is_empty())
+}
+
+/// Auto-commit all changes with a message
+fn git_auto_commit(message: &str) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+
+    // Check if there are changes to commit
+    if !git_has_changes()? {
+        println!("No changes to commit");
+        return Ok(());
+    }
+
+    // Stage all changes
+    let add_output = std::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git add: {}", e))?;
+
+    if !add_output.status.success() {
+        let stderr = String::from_utf8_lossy(&add_output.stderr);
+        return Err(format!("Git add failed: {}", stderr));
+    }
+
+    // Commit with message
+    let commit_output = std::process::Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git commit: {}", e))?;
+
+    if !commit_output.status.success() {
+        let stderr = String::from_utf8_lossy(&commit_output.stderr);
+        // It's okay if there's nothing to commit
+        if !stderr.contains("nothing to commit") {
+            return Err(format!("Git commit failed: {}", stderr));
+        }
+    }
+
+    println!("Git auto-commit: {}", message);
+    Ok(())
+}
+
+/// Check if a branch exists
+fn git_branch_exists(branch_name: &str) -> Result<bool, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+
+    let output = std::process::Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch_name)])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git show-ref: {}", e))?;
+
+    Ok(output.status.success())
+}
+
+/// Checkout existing branch or create new one
+fn git_checkout_or_create(branch_name: &str) -> Result<bool, String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+
+    let branch_existed = git_branch_exists(branch_name)?;
+
+    if branch_existed {
+        // Checkout existing branch
+        let output = std::process::Command::new("git")
+            .args(["checkout", branch_name])
+            .current_dir(&claude_dir)
+            .output()
+            .map_err(|e| format!("Failed to run git checkout: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Git checkout failed: {}", stderr));
+        }
+        println!("Checked out existing branch: {}", branch_name);
+    } else {
+        // Create and checkout new branch
+        let output = std::process::Command::new("git")
+            .args(["checkout", "-b", branch_name])
+            .current_dir(&claude_dir)
+            .output()
+            .map_err(|e| format!("Failed to run git checkout -b: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Git checkout -b failed: {}", stderr));
+        }
+        println!("Created and checked out new branch: {}", branch_name);
+    }
+
+    Ok(branch_existed)
+}
+
+/// Initialize workspace branch with content from stored workspace
+fn git_init_workspace_branch(workspace_path: &str, store_id: &str) -> Result<(), String> {
+    // Clear ~/.claude (managed items only)
+    clear_claude_dir_for_switch()?;
+
+    // Copy workspace content to ~/.claude
+    copy_workspace_to_claude(workspace_path)?;
+
+    // Commit the initial state
+    git_auto_commit(&format!("Initialize workspace/{}", store_id))?;
+
+    Ok(())
+}
+
+// ============================================================================
+
 /// Sync workspace from current ~/.claude state (update workspace with current state)
 #[tauri::command]
 pub async fn sync_workspace_from_claude(store_id: String) -> Result<(), String> {
@@ -645,6 +806,16 @@ pub async fn sync_workspace_from_claude(store_id: String) -> Result<(), String> 
         return Err("Cannot sync a settings-only workspace".to_string());
     }
 
+    // Git: Commit current changes if ~/.claude is a git repo
+    if git_is_repo()? {
+        if git_has_changes()? {
+            git_auto_commit(&format!("Sync: workspace/{}", store_id))?;
+            println!("Git: committed changes for workspace/{}", store_id);
+        } else {
+            println!("Git: no changes to commit");
+        }
+    }
+
     let workspace_path = store.workspace_path.as_ref()
         .ok_or("Workspace path not found")?;
 
@@ -655,7 +826,7 @@ pub async fn sync_workspace_from_claude(store_id: String) -> Result<(), String> 
             .map_err(|e| format!("Failed to remove old workspace: {}", e))?;
     }
 
-    // Copy current ~/.claude to workspace
+    // Copy current ~/.claude to workspace (for backup/reference)
     let new_path = copy_claude_to_workspace(&store_id, store.include_scripts)?;
 
     // Update metadata
@@ -1057,20 +1228,51 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
         WorkspaceType::FullDirectory => {
             println!("Switching to full directory workspace: {}", selected_store.title);
 
-            // 1. Backup current ~/.claude before switch
-            let backup_path = backup_current_claude_dir()?;
-            println!("Created backup at: {}", backup_path);
+            let workspace_path = selected_store.workspace_path.as_ref()
+                .ok_or("Workspace path not found for full directory workspace")?;
 
-            // 2. Clear ~/.claude (managed items only)
-            clear_claude_dir_for_switch()?;
-            println!("Cleared ~/.claude for switch");
+            // Check if ~/.claude is a git repository
+            let is_git_repo = git_is_repo()?;
 
-            // 3. Copy workspace to ~/.claude
-            if let Some(workspace_path) = &selected_store.workspace_path {
+            if is_git_repo {
+                // Git-based workspace switching
+                println!("Git repository detected, using branch-based switching");
+
+                // 1. Auto-commit any pending changes on current branch
+                let current_branch = git_current_branch()?;
+                println!("Current branch: {}", current_branch);
+
+                if git_has_changes()? {
+                    git_auto_commit(&format!("Auto-save before switching to {}", store_id))?;
+                    println!("Auto-committed changes on branch: {}", current_branch);
+                }
+
+                // 2. Checkout or create target branch
+                let target_branch = format!("workspace/{}", store_id);
+                let branch_existed = git_checkout_or_create(&target_branch)?;
+
+                // 3. If branch was just created, initialize it with workspace content
+                if !branch_existed {
+                    println!("Initializing new branch with workspace content");
+                    git_init_workspace_branch(workspace_path, &store_id)?;
+                }
+
+                println!("Git branch switch completed: {} -> {}", current_branch, target_branch);
+            } else {
+                // Fallback: Non-git workspace switching (original behavior)
+                println!("No git repository detected, using file-copy switching");
+
+                // 1. Backup current ~/.claude before switch
+                let backup_path = backup_current_claude_dir()?;
+                println!("Created backup at: {}", backup_path);
+
+                // 2. Clear ~/.claude (managed items only)
+                clear_claude_dir_for_switch()?;
+                println!("Cleared ~/.claude for switch");
+
+                // 3. Copy workspace to ~/.claude
                 copy_workspace_to_claude(workspace_path)?;
                 println!("Restored workspace from: {}", workspace_path);
-            } else {
-                return Err("Workspace path not found for full directory workspace".to_string());
             }
         },
         WorkspaceType::SettingsOnly => {
