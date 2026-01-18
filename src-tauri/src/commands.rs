@@ -9,11 +9,10 @@ use fs_extra::dir::{copy as copy_dir, CopyOptions};
 // Application configuration directory
 const APP_CONFIG_DIR: &str = ".ccconfig";
 const WORKSPACES_DIR: &str = "workspaces";
-const BACKUPS_DIR: &str = "backups";
 
 // Directories to EXCLUDE when copying ~/.claude to workspace (session-specific, caches)
 const EXCLUDED_DIRS: &[&str] = &[
-    "debug",           // Debug logs (volumineux)
+    "debug",           // Debug logs
     "file-history",    // File history
     "session-env",     // Session variables
     "shell-snapshots", // Shell snapshots
@@ -23,29 +22,11 @@ const EXCLUDED_DIRS: &[&str] = &[
     "projects",        // Project state
     "paste-cache",     // Paste cache
     ".git",            // Git repo
+    ".claude",         // User's local settings (settings.local.json, tasks)
     "history.jsonl",   // Conversation history
     "tool-usage.log",  // Tool usage log
     "stats-cache.json", // Stats cache
     "cache",           // General cache
-];
-
-// Directories to ALWAYS include when copying
-const ALWAYS_INCLUDED_DIRS: &[&str] = &[
-    "skills",
-    "commands",
-    "agents",
-    "rules",
-    "plugins",
-    "docs",
-    "chrome",
-    "song",
-];
-
-// Files to always include
-const INCLUDED_FILES: &[&str] = &[
-    "settings.json",
-    "CLAUDE.md",
-    ".mcp.json",
 ];
 
 // Workspace type enum
@@ -471,6 +452,73 @@ fn copy_claude_to_workspace(workspace_id: &str, include_scripts: bool) -> Result
     Ok(workspace_path.to_string_lossy().to_string())
 }
 
+/// Sync current ~/.claude content to an existing workspace path
+/// Used to save current state before switching workspaces
+fn sync_workspace_content(workspace_path: &str, include_scripts: bool) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+    let workspace = std::path::Path::new(workspace_path);
+
+    if !claude_dir.exists() {
+        return Ok(());
+    }
+
+    // Ensure workspace directory exists
+    std::fs::create_dir_all(workspace)
+        .map_err(|e| format!("Failed to create workspace directory: {}", e))?;
+
+    // Clear existing workspace content (managed items only) to ensure clean sync
+    let managed_items = vec![
+        "settings.json", "CLAUDE.md", ".mcp.json",
+        "skills", "commands", "agents", "rules", "plugins", "docs", "chrome", "song",
+    ];
+
+    for item in &managed_items {
+        let item_path = workspace.join(item);
+        if item_path.exists() {
+            if item_path.is_file() {
+                let _ = std::fs::remove_file(&item_path);
+            } else if item_path.is_dir() {
+                let _ = std::fs::remove_dir_all(&item_path);
+            }
+        }
+    }
+
+    // Copy files and directories from ~/.claude to workspace
+    for entry in std::fs::read_dir(&claude_dir)
+        .map_err(|e| format!("Failed to read Claude directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let source_path = entry.path();
+        let file_name = source_path.file_name().ok_or("Invalid file name")?;
+
+        // Check if this should be excluded
+        if should_exclude(&source_path, include_scripts) {
+            continue;
+        }
+
+        let dest_path = workspace.join(file_name);
+
+        if source_path.is_file() {
+            std::fs::copy(&source_path, &dest_path)
+                .map_err(|e| format!("Failed to copy file {}: {}", source_path.display(), e))?;
+        } else if source_path.is_dir() {
+            // Remove destination if exists to ensure clean copy
+            if dest_path.exists() {
+                let _ = std::fs::remove_dir_all(&dest_path);
+            }
+            let mut options = CopyOptions::new();
+            options.overwrite = true;
+            options.copy_inside = true;
+            copy_dir(&source_path, workspace, &options)
+                .map_err(|e| format!("Failed to copy directory {}: {}", source_path.display(), e))?;
+        }
+    }
+
+    println!("Workspace synced: {}", workspace_path);
+    Ok(())
+}
+
 /// Copy workspace back to ~/.claude
 fn copy_workspace_to_claude(workspace_path: &str) -> Result<(), String> {
     let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
@@ -485,6 +533,15 @@ fn copy_workspace_to_claude(workspace_path: &str) -> Result<(), String> {
     std::fs::create_dir_all(&claude_dir)
         .map_err(|e| format!("Failed to create .claude directory: {}", e))?;
 
+    // Items to skip when copying from workspace to ~/.claude
+    // These are either session-specific or should not be overwritten
+    let skip_items: Vec<&str> = vec![
+        ".git", ".claude", ".DS_Store", ".gitignore", ".gitmodules",
+        "debug", "file-history", "session-env", "shell-snapshots",
+        "todos", "telemetry", "statsig", "projects", "paste-cache",
+        "history.jsonl", "tool-usage.log", "stats-cache.json", "cache",
+    ];
+
     // Copy files from workspace to ~/.claude
     for entry in std::fs::read_dir(workspace)
         .map_err(|e| format!("Failed to read workspace directory: {}", e))?
@@ -492,12 +549,20 @@ fn copy_workspace_to_claude(workspace_path: &str) -> Result<(), String> {
         let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
         let source_path = entry.path();
         let file_name = source_path.file_name().ok_or("Invalid file name")?;
+        let file_name_str = file_name.to_string_lossy();
+
+        // Skip excluded items
+        if skip_items.contains(&file_name_str.as_ref()) {
+            println!("Skipping excluded item: {}", file_name_str);
+            continue;
+        }
+
         let dest_path = claude_dir.join(file_name);
 
         if source_path.is_file() {
             std::fs::copy(&source_path, &dest_path)
                 .map_err(|e| format!("Failed to copy file {}: {}", source_path.display(), e))?;
-            println!("Restored file: {}", file_name.to_string_lossy());
+            println!("Restored file: {}", file_name_str);
         } else if source_path.is_dir() {
             // Remove existing directory first to avoid conflicts
             if dest_path.exists() {
@@ -512,7 +577,7 @@ fn copy_workspace_to_claude(workspace_path: &str) -> Result<(), String> {
 
             copy_dir(&source_path, &claude_dir, &options)
                 .map_err(|e| format!("Failed to copy directory {}: {}", source_path.display(), e))?;
-            println!("Restored directory: {}", file_name.to_string_lossy());
+            println!("Restored directory: {}", file_name_str);
         }
     }
 
@@ -560,62 +625,6 @@ fn clear_claude_dir_for_switch() -> Result<(), String> {
     }
 
     Ok(())
-}
-
-/// Create timestamped backup before switching workspace
-fn backup_current_claude_dir() -> Result<String, String> {
-    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
-    let claude_dir = home_dir.join(".claude");
-    let app_config_path = home_dir.join(APP_CONFIG_DIR);
-    let backups_path = app_config_path.join(BACKUPS_DIR);
-
-    // Create timestamp-based backup directory
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-    let backup_path = backups_path.join(format!("backup_{}", timestamp));
-
-    // Ensure backups directory exists
-    std::fs::create_dir_all(&backups_path)
-        .map_err(|e| format!("Failed to create backups directory: {}", e))?;
-
-    if !claude_dir.exists() {
-        println!("No .claude directory to backup");
-        return Ok(backup_path.to_string_lossy().to_string());
-    }
-
-    // Create backup directory
-    std::fs::create_dir_all(&backup_path)
-        .map_err(|e| format!("Failed to create backup directory: {}", e))?;
-
-    // Copy claude directory to backup (only managed items)
-    for entry in std::fs::read_dir(&claude_dir)
-        .map_err(|e| format!("Failed to read Claude directory: {}", e))?
-    {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
-        let source_path = entry.path();
-        let file_name = source_path.file_name().ok_or("Invalid file name")?;
-
-        // Only backup items that we manage
-        if should_exclude(&source_path, true) {
-            continue;
-        }
-
-        let dest_path = backup_path.join(file_name);
-
-        if source_path.is_file() {
-            std::fs::copy(&source_path, &dest_path)
-                .map_err(|e| format!("Failed to backup file {}: {}", source_path.display(), e))?;
-        } else if source_path.is_dir() {
-            let mut options = CopyOptions::new();
-            options.overwrite = true;
-            options.copy_inside = true;
-
-            copy_dir(&source_path, &backup_path, &options)
-                .map_err(|e| format!("Failed to backup directory {}: {}", source_path.display(), e))?;
-        }
-    }
-
-    println!("Backup created at: {}", backup_path.display());
-    Ok(backup_path.to_string_lossy().to_string())
 }
 
 // ============================================================================
@@ -669,6 +678,73 @@ fn git_has_changes() -> Result<bool, String> {
     Ok(!status.trim().is_empty())
 }
 
+/// Switch git branch reference WITHOUT checkout (no file operations)
+/// This avoids the Ghostty crash by not triggering file system events
+fn git_switch_branch_ref(branch_name: &str) -> Result<(), String> {
+    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
+    let claude_dir = home_dir.join(".claude");
+
+    let full_branch = if branch_name.starts_with("refs/") {
+        branch_name.to_string()
+    } else if branch_name.starts_with("workspace/") {
+        format!("refs/heads/{}", branch_name)
+    } else {
+        format!("refs/heads/workspace/{}", branch_name)
+    };
+
+    // Check if the branch exists
+    let check_output = std::process::Command::new("git")
+        .args(["show-ref", "--verify", "--quiet", &full_branch])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to check branch: {}", e))?;
+
+    if !check_output.status.success() {
+        // Branch doesn't exist, create it from current HEAD
+        let create_output = std::process::Command::new("git")
+            .args(["branch", branch_name.trim_start_matches("workspace/")])
+            .current_dir(&claude_dir)
+            .output()
+            .map_err(|e| format!("Failed to create branch: {}", e))?;
+
+        if !create_output.status.success() {
+            let stderr = String::from_utf8_lossy(&create_output.stderr);
+            // Ignore "already exists" error
+            if !stderr.contains("already exists") {
+                return Err(format!("Failed to create branch: {}", stderr));
+            }
+        }
+    }
+
+    // Switch HEAD to point to the new branch (no file checkout)
+    let output = std::process::Command::new("git")
+        .args(["symbolic-ref", "HEAD", &full_branch])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to switch branch ref: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git symbolic-ref failed: {}", stderr));
+    }
+
+    // Reset index to match HEAD (soft reset, no file changes)
+    let reset_output = std::process::Command::new("git")
+        .args(["reset", "--soft", "HEAD"])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to reset index: {}", e))?;
+
+    if !reset_output.status.success() {
+        // Non-fatal, just log
+        let stderr = String::from_utf8_lossy(&reset_output.stderr);
+        println!("Warning: git reset soft failed (non-fatal): {}", stderr);
+    }
+
+    println!("Switched git branch ref to: {}", branch_name);
+    Ok(())
+}
+
 /// Auto-commit all changes with a message
 fn git_auto_commit(message: &str) -> Result<(), String> {
     let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
@@ -708,72 +784,6 @@ fn git_auto_commit(message: &str) -> Result<(), String> {
     }
 
     println!("Git auto-commit: {}", message);
-    Ok(())
-}
-
-/// Check if a branch exists
-fn git_branch_exists(branch_name: &str) -> Result<bool, String> {
-    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
-    let claude_dir = home_dir.join(".claude");
-
-    let output = std::process::Command::new("git")
-        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", branch_name)])
-        .current_dir(&claude_dir)
-        .output()
-        .map_err(|e| format!("Failed to run git show-ref: {}", e))?;
-
-    Ok(output.status.success())
-}
-
-/// Checkout existing branch or create new one
-fn git_checkout_or_create(branch_name: &str) -> Result<bool, String> {
-    let home_dir = dirs::home_dir().ok_or("Could not find home directory")?;
-    let claude_dir = home_dir.join(".claude");
-
-    let branch_existed = git_branch_exists(branch_name)?;
-
-    if branch_existed {
-        // Checkout existing branch
-        let output = std::process::Command::new("git")
-            .args(["checkout", branch_name])
-            .current_dir(&claude_dir)
-            .output()
-            .map_err(|e| format!("Failed to run git checkout: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Git checkout failed: {}", stderr));
-        }
-        println!("Checked out existing branch: {}", branch_name);
-    } else {
-        // Create and checkout new branch
-        let output = std::process::Command::new("git")
-            .args(["checkout", "-b", branch_name])
-            .current_dir(&claude_dir)
-            .output()
-            .map_err(|e| format!("Failed to run git checkout -b: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Git checkout -b failed: {}", stderr));
-        }
-        println!("Created and checked out new branch: {}", branch_name);
-    }
-
-    Ok(branch_existed)
-}
-
-/// Initialize workspace branch with content from stored workspace
-fn git_init_workspace_branch(workspace_path: &str, store_id: &str) -> Result<(), String> {
-    // Clear ~/.claude (managed items only)
-    clear_claude_dir_for_switch()?;
-
-    // Copy workspace content to ~/.claude
-    copy_workspace_to_claude(workspace_path)?;
-
-    // Commit the initial state
-    git_auto_commit(&format!("Initialize workspace/{}", store_id))?;
-
     Ok(())
 }
 
@@ -1231,48 +1241,56 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
             let workspace_path = selected_store.workspace_path.as_ref()
                 .ok_or("Workspace path not found for full directory workspace")?;
 
-            // Check if ~/.claude is a git repository
-            let is_git_repo = git_is_repo()?;
+            // WORKAROUND: Git-based switching causes Ghostty terminal crashes when
+            // Claude Code is active (known bug: anthropics/claude-code#5939).
+            // Always use file-copy mode for safer workspace switching.
+            //
+            // If git repo exists, we still auto-commit changes before switching
+            // to preserve the current state, but we use file-copy for the actual switch.
 
-            if is_git_repo {
-                // Git-based workspace switching
-                println!("Git repository detected, using branch-based switching");
-
-                // 1. Auto-commit any pending changes on current branch
-                let current_branch = git_current_branch()?;
-                println!("Current branch: {}", current_branch);
-
-                if git_has_changes()? {
-                    git_auto_commit(&format!("Auto-save before switching to {}", store_id))?;
-                    println!("Auto-committed changes on branch: {}", current_branch);
+            // Try to auto-commit git changes, but don't block if it fails
+            // This is just for preserving history, not critical for workspace switching
+            if let Ok(true) = git_is_repo() {
+                if let Ok(true) = git_has_changes() {
+                    if let Ok(branch) = git_current_branch() {
+                        match git_auto_commit(&format!("Auto-save before switching to {}", store_id)) {
+                            Ok(_) => println!("Auto-committed changes on branch: {}", branch),
+                            Err(e) => println!("Warning: Could not auto-commit (non-blocking): {}", e),
+                        }
+                    }
                 }
+            }
 
-                // 2. Checkout or create target branch
-                let target_branch = format!("workspace/{}", store_id);
-                let branch_existed = git_checkout_or_create(&target_branch)?;
+            // Use file-copy switching (safer with Ghostty + Claude Code)
+            println!("Using file-copy switching for compatibility");
 
-                // 3. If branch was just created, initialize it with workspace content
-                if !branch_existed {
-                    println!("Initializing new branch with workspace content");
-                    git_init_workspace_branch(workspace_path, &store_id)?;
+            // 1. Sync current workspace before switching (save current state)
+            if let Some(current_store) = stores_data.configs.iter().find(|s| s.using) {
+                if current_store.workspace_type == WorkspaceType::FullDirectory {
+                    if let Some(current_ws_path) = &current_store.workspace_path {
+                        println!("Syncing current workspace before switch: {}", current_store.title);
+                        // Copy current ~/.claude to current workspace storage
+                        let _ = sync_workspace_content(current_ws_path, current_store.include_scripts);
+                    }
                 }
+            }
 
-                println!("Git branch switch completed: {} -> {}", current_branch, target_branch);
-            } else {
-                // Fallback: Non-git workspace switching (original behavior)
-                println!("No git repository detected, using file-copy switching");
+            // 2. Clear ~/.claude (managed items only)
+            clear_claude_dir_for_switch()?;
+            println!("Cleared ~/.claude for switch");
 
-                // 1. Backup current ~/.claude before switch
-                let backup_path = backup_current_claude_dir()?;
-                println!("Created backup at: {}", backup_path);
+            // 3. Copy target workspace to ~/.claude
+            copy_workspace_to_claude(workspace_path)?;
+            println!("Restored workspace from: {}", workspace_path);
 
-                // 2. Clear ~/.claude (managed items only)
-                clear_claude_dir_for_switch()?;
-                println!("Cleared ~/.claude for switch");
-
-                // 3. Copy workspace to ~/.claude
-                copy_workspace_to_claude(workspace_path)?;
-                println!("Restored workspace from: {}", workspace_path);
+            // 4. Switch git branch reference (without checkout) to keep git in sync
+            // This uses symbolic-ref which only updates the HEAD pointer, no file operations
+            if let Ok(true) = git_is_repo() {
+                let branch_name = format!("workspace/{}", store_id);
+                match git_switch_branch_ref(&branch_name) {
+                    Ok(_) => println!("Git branch ref switched to: {}", branch_name),
+                    Err(e) => println!("Warning: Could not switch git branch ref (non-blocking): {}", e),
+                }
             }
         },
         WorkspaceType::SettingsOnly => {
