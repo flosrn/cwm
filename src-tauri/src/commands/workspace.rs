@@ -451,6 +451,42 @@ pub async fn sync_workspace_from_claude(store_id: String) -> Result<(), String> 
     Ok(())
 }
 
+/// Get current item counts from ~/.claude directory
+/// This is used to compare with workspace counts to detect unsaved changes
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct ClaudeDirCounts {
+    pub skills: u32,
+    pub commands: u32,
+    pub agents: u32,
+    pub plugins: u32,
+}
+
+#[tauri::command]
+pub async fn get_claude_dir_counts() -> Result<ClaudeDirCounts, String> {
+    let claude_dir = get_claude_dir()?;
+
+    if !claude_dir.exists() {
+        return Ok(ClaudeDirCounts {
+            skills: 0,
+            commands: 0,
+            agents: 0,
+            plugins: 0,
+        });
+    }
+
+    let skills = count_skill_directories(&claude_dir.join("skills"));
+    let commands = count_directory_items(&claude_dir.join("commands"));
+    let agents = count_directory_items(&claude_dir.join("agents"));
+    let plugins = count_plugin_directories(&claude_dir.join("plugins"));
+
+    Ok(ClaudeDirCounts {
+        skills,
+        commands,
+        agents,
+        plugins,
+    })
+}
+
 /// Refresh workspace item counts without copying files from ~/.claude
 #[tauri::command]
 pub async fn refresh_workspace_counts(store_id: String) -> Result<ConfigStore, String> {

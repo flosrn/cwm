@@ -52,6 +52,7 @@ import { cn } from "@/lib/utils";
 import {
 	type GitImportPreview,
 	type WorkspaceType,
+	useClaudeDirCounts,
 	useCreateConfig,
 	useImportWorkspaceFromGit,
 	usePreviewGitImport,
@@ -74,6 +75,7 @@ export function ConfigSwitcherPage() {
 function ConfigStores() {
 	const { t } = useTranslation();
 	const { data: stores } = useStores();
+	const { data: claudeDirCounts } = useClaudeDirCounts();
 	const setCurrentStoreMutation = useSetCurrentConfig();
 	const resetToOriginalMutation = useResetToOriginalConfig();
 	const syncWorkspaceMutation = useSyncWorkspaceFromClaude();
@@ -556,17 +558,85 @@ function ConfigStores() {
 
 									{isFullDir && (
 										<div className="text-[10px] text-muted-foreground mt-1 flex gap-2">
-											<span>
-												{store.skillsCount ?? 0} {t("workspace.skills")}
+											<span
+												className={cn({
+													"text-yellow-500 font-medium":
+														isCurrentStore &&
+														claudeDirCounts &&
+														(store.skillsCount ?? 0) !== claudeDirCounts.skills,
+												})}
+												title={
+													isCurrentStore &&
+													claudeDirCounts &&
+													(store.skillsCount ?? 0) !== claudeDirCounts.skills
+														? `${t("workspace.currentValue")}: ${claudeDirCounts.skills}`
+														: undefined
+												}
+											>
+												{isCurrentStore && claudeDirCounts && (store.skillsCount ?? 0) !== claudeDirCounts.skills
+													? claudeDirCounts.skills
+													: (store.skillsCount ?? 0)}{" "}
+												{t("workspace.skills")}
 											</span>
-											<span>
-												{store.commandsCount ?? 0} {t("workspace.commands")}
+											<span
+												className={cn({
+													"text-yellow-500 font-medium":
+														isCurrentStore &&
+														claudeDirCounts &&
+														(store.commandsCount ?? 0) !== claudeDirCounts.commands,
+												})}
+												title={
+													isCurrentStore &&
+													claudeDirCounts &&
+													(store.commandsCount ?? 0) !== claudeDirCounts.commands
+														? `${t("workspace.currentValue")}: ${claudeDirCounts.commands}`
+														: undefined
+												}
+											>
+												{isCurrentStore && claudeDirCounts && (store.commandsCount ?? 0) !== claudeDirCounts.commands
+													? claudeDirCounts.commands
+													: (store.commandsCount ?? 0)}{" "}
+												{t("workspace.commands")}
 											</span>
-											<span>
-												{store.agentsCount ?? 0} {t("workspace.agents")}
+											<span
+												className={cn({
+													"text-yellow-500 font-medium":
+														isCurrentStore &&
+														claudeDirCounts &&
+														(store.agentsCount ?? 0) !== claudeDirCounts.agents,
+												})}
+												title={
+													isCurrentStore &&
+													claudeDirCounts &&
+													(store.agentsCount ?? 0) !== claudeDirCounts.agents
+														? `${t("workspace.currentValue")}: ${claudeDirCounts.agents}`
+														: undefined
+												}
+											>
+												{isCurrentStore && claudeDirCounts && (store.agentsCount ?? 0) !== claudeDirCounts.agents
+													? claudeDirCounts.agents
+													: (store.agentsCount ?? 0)}{" "}
+												{t("workspace.agents")}
 											</span>
-											<span>
-												{store.pluginsCount ?? 0} {t("workspace.plugins")}
+											<span
+												className={cn({
+													"text-yellow-500 font-medium":
+														isCurrentStore &&
+														claudeDirCounts &&
+														(store.pluginsCount ?? 0) !== claudeDirCounts.plugins,
+												})}
+												title={
+													isCurrentStore &&
+													claudeDirCounts &&
+													(store.pluginsCount ?? 0) !== claudeDirCounts.plugins
+														? `${t("workspace.currentValue")}: ${claudeDirCounts.plugins}`
+														: undefined
+												}
+											>
+												{isCurrentStore && claudeDirCounts && (store.pluginsCount ?? 0) !== claudeDirCounts.plugins
+													? claudeDirCounts.plugins
+													: (store.pluginsCount ?? 0)}{" "}
+												{t("workspace.plugins")}
 											</span>
 										</div>
 									)}

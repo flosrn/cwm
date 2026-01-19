@@ -321,6 +321,7 @@
 	"workspace.commands": "cmds",
 	"workspace.agents": "agents",
 	"workspace.plugins": "plugins",
+	"workspace.currentValue": "Actuel ~/.claude",
 	"workspace.syncTooltip": "Synchroniser le workspace depuis l'état actuel de ~/.claude",
 	"workspace.switchWarningTitle": "Fermer les sessions Claude Code",
 	"workspace.switchWarningDescription": "Changer de workspace va modifier le répertoire ~/.claude. Toutes les sessions Claude Code actives dans vos terminaux risquent de geler ou devenir non-réactives.",

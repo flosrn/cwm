@@ -321,6 +321,7 @@
 	"workspace.commands": "cmds",
 	"workspace.agents": "agents",
 	"workspace.plugins": "plugins",
+	"workspace.currentValue": "Current ~/.claude",
 	"workspace.syncTooltip": "Sync workspace from current ~/.claude state",
 	"workspace.switchWarningTitle": "Close Claude Code Sessions",
 	"workspace.switchWarningDescription": "Switching workspaces will modify the ~/.claude directory. All active Claude Code sessions in your terminals may freeze or become unresponsive.",

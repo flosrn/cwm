@@ -66,6 +66,13 @@ export interface GitImportPreview {
 	rootMdFiles: string[];
 }
 
+export interface ClaudeDirCounts {
+	skills: number;
+	commands: number;
+	agents: number;
+	plugins: number;
+}
+
 export interface McpServer {
 	config: Record<string, any>;
 }
@@ -158,6 +165,14 @@ export const useCurrentStore = () => {
 	return useSuspenseQuery({
 		queryKey: ["current-store"],
 		queryFn: () => invoke<ConfigStore | null>("get_current_store"),
+	});
+};
+
+export const useClaudeDirCounts = () => {
+	return useQuery({
+		queryKey: ["claude-dir-counts"],
+		queryFn: () => invoke<ClaudeDirCounts>("get_claude_dir_counts"),
+		refetchInterval: 5000, // Refetch every 5 seconds to detect changes
 	});
 };
 

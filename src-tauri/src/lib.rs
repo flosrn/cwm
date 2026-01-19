@@ -11,7 +11,7 @@ use commands::{
     create_config, delete_config, get_current_store, get_store, get_stores,
     reset_to_original_config, set_using_config, update_config,
     // Workspace commands
-    refresh_workspace_counts, sync_workspace_from_claude,
+    get_claude_dir_counts, refresh_workspace_counts, sync_workspace_from_claude,
     // Git import commands
     import_workspace_from_git, preview_git_import,
     // MCP commands
@@ -241,6 +241,7 @@ pub fn run() {
             delete_claude_skill,
             sync_workspace_from_claude,
             refresh_workspace_counts,
+            get_claude_dir_counts,
             read_claude_plugins,
             toggle_plugin,
             delete_local_plugin,

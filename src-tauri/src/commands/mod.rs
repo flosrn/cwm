@@ -34,7 +34,7 @@ pub use stores::{
 };
 
 // Workspace commands
-pub use workspace::{refresh_workspace_counts, sync_workspace_from_claude};
+pub use workspace::{get_claude_dir_counts, refresh_workspace_counts, sync_workspace_from_claude};
 
 // MCP commands
 pub use mcp::{

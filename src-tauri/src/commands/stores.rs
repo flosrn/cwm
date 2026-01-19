@@ -141,34 +141,32 @@ pub async fn get_stores() -> Result<Vec<ConfigStore>, String> {
         println!("Added default notification settings to existing stores.json");
     }
 
-    // Auto-refresh counts for FullDirectory workspaces missing any count or all zeros (migration/fix)
+    // ALWAYS recalculate counts for FullDirectory workspaces to ensure accuracy
+    // This is more robust than trying to detect when counts are stale
     for store in stores_data.configs.iter_mut() {
-        let has_missing_counts = store.skills_count.is_none()
-            || store.commands_count.is_none()
-            || store.agents_count.is_none()
-            || store.plugins_count.is_none();
-
-        let all_counts_zero = store.skills_count == Some(0)
-            && store.commands_count == Some(0)
-            && store.agents_count == Some(0)
-            && store.plugins_count == Some(0);
-
-        let needs_refresh = store.workspace_type == WorkspaceType::FullDirectory
-            && store.workspace_path.is_some()
-            && (has_missing_counts || all_counts_zero);
-
-        if needs_refresh {
+        if store.workspace_type == WorkspaceType::FullDirectory {
             if let Some(ref workspace_path) = store.workspace_path {
-                if let Ok((skills, commands, agents, plugins)) = count_workspace_items(workspace_path) {
-                    store.skills_count = skills;
-                    store.commands_count = commands;
-                    store.agents_count = agents;
-                    store.plugins_count = plugins;
-                    needs_save = true;
-                    println!(
-                        "Auto-refreshed counts for workspace: {} (skills: {:?}, cmds: {:?}, agents: {:?}, plugins: {:?})",
-                        store.id, skills, commands, agents, plugins
-                    );
+                // Only recalculate if workspace directory exists
+                if std::path::Path::new(workspace_path).exists() {
+                    if let Ok((skills, commands, agents, plugins)) = count_workspace_items(workspace_path) {
+                        // Check if counts changed
+                        let counts_changed = store.skills_count != skills
+                            || store.commands_count != commands
+                            || store.agents_count != agents
+                            || store.plugins_count != plugins;
+
+                        if counts_changed {
+                            store.skills_count = skills;
+                            store.commands_count = commands;
+                            store.agents_count = agents;
+                            store.plugins_count = plugins;
+                            needs_save = true;
+                            println!(
+                                "Recalculated counts for workspace '{}': skills={:?}, cmds={:?}, agents={:?}, plugins={:?}",
+                                store.title, skills, commands, agents, plugins
+                            );
+                        }
+                    }
                 }
             }
         }
