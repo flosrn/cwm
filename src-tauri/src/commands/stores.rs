@@ -141,14 +141,21 @@ pub async fn get_stores() -> Result<Vec<ConfigStore>, String> {
         println!("Added default notification settings to existing stores.json");
     }
 
-    // Auto-refresh counts for FullDirectory workspaces missing any count (migration)
+    // Auto-refresh counts for FullDirectory workspaces missing any count or all zeros (migration/fix)
     for store in stores_data.configs.iter_mut() {
+        let has_missing_counts = store.skills_count.is_none()
+            || store.commands_count.is_none()
+            || store.agents_count.is_none()
+            || store.plugins_count.is_none();
+
+        let all_counts_zero = store.skills_count == Some(0)
+            && store.commands_count == Some(0)
+            && store.agents_count == Some(0)
+            && store.plugins_count == Some(0);
+
         let needs_refresh = store.workspace_type == WorkspaceType::FullDirectory
             && store.workspace_path.is_some()
-            && (store.skills_count.is_none()
-                || store.commands_count.is_none()
-                || store.agents_count.is_none()
-                || store.plugins_count.is_none());
+            && (has_missing_counts || all_counts_zero);
 
         if needs_refresh {
             if let Some(ref workspace_path) = store.workspace_path {
