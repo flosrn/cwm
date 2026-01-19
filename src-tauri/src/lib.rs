@@ -1,8 +1,38 @@
 mod commands;
-mod tray;
 mod hook_server;
+mod tray;
 
-use commands::*;
+use commands::{
+    // Config commands
+    backup_claude_configs, check_app_config_exists, create_app_config_dir, initialize_app_config,
+    list_config_files, open_config_path, read_claude_config_file, read_config_file,
+    write_claude_config_file, write_config_file,
+    // Stores commands
+    create_config, delete_config, get_current_store, get_store, get_stores,
+    reset_to_original_config, set_using_config, update_config,
+    // Workspace commands
+    refresh_workspace_counts, sync_workspace_from_claude,
+    // Git import commands
+    import_workspace_from_git, preview_git_import,
+    // MCP commands
+    check_mcp_server_exists, delete_global_mcp_server, get_global_mcp_servers,
+    update_global_mcp_server,
+    // Memory commands
+    read_claude_memory, write_claude_memory,
+    // Projects commands
+    read_claude_projects, read_project_usage_files,
+    // Skills commands
+    delete_claude_agent, delete_claude_command, delete_claude_skill, read_claude_agents,
+    read_claude_commands, read_claude_skills, write_claude_agent, write_claude_command,
+    write_claude_skill,
+    // Plugins commands
+    delete_local_plugin, read_claude_plugins, toggle_plugin,
+    // Hooks commands
+    add_claude_code_hook, get_notification_settings, remove_claude_code_hook,
+    update_claude_code_hook, update_notification_settings,
+    // Updates commands
+    check_for_updates, install_and_restart, rebuild_tray_menu_command, track, unlock_cc_ext,
+};
 use hook_server::start_hook_server;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -117,7 +147,7 @@ pub fn run() {
                 match event_id {
                     "open_config_path" => {
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = commands::open_config_path().await {
+                            if let Err(e) = open_config_path().await {
                                 eprintln!("Failed to open config path: {}", e);
                             }
                         });
@@ -138,7 +168,7 @@ pub fn run() {
             println!("Setting up app...");
             tauri::async_runtime::spawn(async move {
                 println!("Initializing app config...");
-                match commands::initialize_app_config().await {
+                match initialize_app_config().await {
                     Ok(()) => println!("App config initialized successfully"),
                     Err(e) => eprintln!("Failed to initialize app config: {}", e),
                 }
@@ -147,7 +177,7 @@ pub fn run() {
             // Always update hooks to ensure they have the latest command settings
             tauri::async_runtime::spawn(async move {
                 println!("Updating Claude Code hooks to latest version...");
-                match commands::update_claude_code_hook().await {
+                match update_claude_code_hook().await {
                     Ok(()) => println!("✅ Claude Code hooks updated/checked successfully"),
                     Err(e) => eprintln!("Failed to update Claude Code hooks: {}", e),
                 }
@@ -213,7 +243,9 @@ pub fn run() {
             refresh_workspace_counts,
             read_claude_plugins,
             toggle_plugin,
-            delete_local_plugin
+            delete_local_plugin,
+            preview_git_import,
+            import_workspace_from_git
         ])
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]

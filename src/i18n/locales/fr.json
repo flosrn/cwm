@@ -329,5 +329,14 @@
 	"workspace.confirmSwitch": "Changer de Workspace",
 	"workspace.switching": "Changement...",
 	"toast.workspaceSynced": "Workspace synchronisé avec succès",
-	"toast.workspaceSyncFailed": "Échec de la synchronisation du workspace: {{error}}"
+	"toast.workspaceSyncFailed": "Échec de la synchronisation du workspace: {{error}}",
+	"toast.workspaceImported": "Workspace importé avec succès",
+	"toast.workspaceImportFailed": "Échec de l'importation du workspace: {{error}}",
+	"workspace.importFromGit": "Importer depuis Git",
+	"workspace.importFromGitDescription": "Importer une configuration Claude Code communautaire (skills, commands, agents) depuis un dépôt Git",
+	"workspace.gitUrl": "URL du dépôt Git",
+	"workspace.previewFailed": "Échec de l'aperçu du dépôt. Veuillez vérifier l'URL et réessayer.",
+	"workspace.previewReady": "Dépôt scanné avec succès",
+	"workspace.importing": "Importation...",
+	"workspace.import": "Importer"
 }

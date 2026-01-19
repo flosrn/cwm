@@ -49,6 +49,21 @@ export interface ConfigStore {
 	agentsCount?: number;
 	pluginsCount?: number;
 	lastSynced?: number;
+	// Git import source tracking
+	sourceUrl?: string;
+}
+
+export interface GitImportPreview {
+	repoName: string;
+	hasSettingsJson: boolean;
+	hasClaudeMd: boolean;
+	hasMcpJson: boolean;
+	skillsCount: number;
+	commandsCount: number;
+	agentsCount: number;
+	pluginsCount: number;
+	hasHooks: boolean;
+	rootMdFiles: string[];
 }
 
 export interface McpServer {
@@ -767,6 +782,41 @@ export const useSyncWorkspaceFromClaude = () => {
 			const errorMessage =
 				error instanceof Error ? error.message : String(error);
 			toast.error(i18n.t("toast.workspaceSyncFailed", { error: errorMessage }));
+		},
+	});
+};
+
+// Git import hooks
+
+export const usePreviewGitImport = () => {
+	return useMutation({
+		mutationFn: (url: string) =>
+			invoke<GitImportPreview>("preview_git_import", { url }),
+	});
+};
+
+export const useImportWorkspaceFromGit = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: async ({ url, title }: { url: string; title: string }) => {
+			const id = nanoid(6);
+			return invoke<ConfigStore>("import_workspace_from_git", {
+				url,
+				title,
+				id,
+			});
+		},
+		onSuccess: async () => {
+			toast.success(i18n.t("toast.workspaceImported"));
+			queryClient.invalidateQueries({ queryKey: ["stores"] });
+			queryClient.invalidateQueries({ queryKey: ["current-store"] });
+			await rebuildTrayMenu();
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(i18n.t("toast.workspaceImportFailed", { error: errorMessage }));
 		},
 	});
 };

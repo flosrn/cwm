@@ -1,12 +1,18 @@
 import { Kimi, Minimax, ZAI } from "@lobehub/icons";
 import {
 	AlertTriangleIcon,
+	CheckIcon,
+	DownloadIcon,
 	EllipsisVerticalIcon,
+	FileTextIcon,
 	FolderIcon,
+	GitBranchIcon,
 	InfoIcon,
+	Loader2Icon,
 	PencilLineIcon,
 	PlusIcon,
 	RefreshCwIcon,
+	SearchIcon,
 	SettingsIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -44,8 +50,11 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
+	type GitImportPreview,
 	type WorkspaceType,
 	useCreateConfig,
+	useImportWorkspaceFromGit,
+	usePreviewGitImport,
 	useResetToOriginalConfig,
 	useSetCurrentConfig,
 	useStores,
@@ -75,6 +84,14 @@ function ConfigStores() {
 	const [newWorkspaceTitle, setNewWorkspaceTitle] = useState("");
 	const [isFullDirectory, setIsFullDirectory] = useState(true);
 	const [includeScripts, setIncludeScripts] = useState(false);
+
+	// Import from Git dialog state
+	const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+	const [importGitUrl, setImportGitUrl] = useState("");
+	const [importTitle, setImportTitle] = useState("");
+	const [importPreview, setImportPreview] = useState<GitImportPreview | null>(null);
+	const previewGitImportMutation = usePreviewGitImport();
+	const importWorkspaceFromGitMutation = useImportWorkspaceFromGit();
 
 	// Confirmation dialog state for workspace switching
 	const [isSwitchDialogOpen, setIsSwitchDialogOpen] = useState(false);
@@ -147,6 +164,38 @@ function ConfigStores() {
 		setIsFullDirectory(true);
 		setIncludeScripts(false);
 		setIsCreateDialogOpen(true);
+	};
+
+	const openImportDialog = () => {
+		setImportGitUrl("");
+		setImportTitle("");
+		setImportPreview(null);
+		setIsImportDialogOpen(true);
+	};
+
+	const handlePreviewGitImport = async () => {
+		if (!importGitUrl.trim()) return;
+		try {
+			const preview = await previewGitImportMutation.mutateAsync(importGitUrl);
+			setImportPreview(preview);
+			if (!importTitle) {
+				setImportTitle(preview.repoName);
+			}
+		} catch {
+			setImportPreview(null);
+		}
+	};
+
+	const handleImportFromGit = async () => {
+		if (!importGitUrl.trim() || !importTitle.trim()) return;
+		await importWorkspaceFromGitMutation.mutateAsync({
+			url: importGitUrl,
+			title: importTitle,
+		});
+		setIsImportDialogOpen(false);
+		setImportGitUrl("");
+		setImportTitle("");
+		setImportPreview(null);
 	};
 
 	if (stores.length === 0) {
@@ -308,6 +357,15 @@ function ConfigStores() {
 						</p>
 					</div>
 					<ButtonGroup>
+						<Button
+							variant="outline"
+							onClick={openImportDialog}
+							className="text-muted-foreground"
+							size="sm"
+						>
+							<DownloadIcon size={14} />
+							{t("workspace.importFromGit")}
+						</Button>
 						<Dialog
 							open={isCreateDialogOpen}
 							onOpenChange={setIsCreateDialogOpen}
@@ -563,6 +621,16 @@ function ConfigStores() {
 					})}
 				</div>
 
+				{/* Loading Overlay during workspace switch */}
+				{(setCurrentStoreMutation.isPending || resetToOriginalMutation.isPending) && (
+					<div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center">
+						<div className="flex flex-col items-center gap-3">
+							<Loader2Icon className="h-8 w-8 animate-spin text-primary" />
+							<p className="text-sm text-muted-foreground">{t("workspace.switching")}</p>
+						</div>
+					</div>
+				)}
+
 				{/* Confirmation Dialog for Workspace Switching */}
 				<Dialog open={isSwitchDialogOpen} onOpenChange={setIsSwitchDialogOpen}>
 					<DialogContent className="border border-primary">
@@ -586,9 +654,158 @@ function ConfigStores() {
 								onClick={confirmSwitch}
 								disabled={setCurrentStoreMutation.isPending || resetToOriginalMutation.isPending}
 							>
-								{(setCurrentStoreMutation.isPending || resetToOriginalMutation.isPending)
-									? t("workspace.switching")
-									: t("workspace.confirmSwitch")}
+								{(setCurrentStoreMutation.isPending || resetToOriginalMutation.isPending) ? (
+									<>
+										<Loader2Icon className="h-4 w-4 animate-spin" />
+										{t("workspace.switching")}
+									</>
+								) : (
+									t("workspace.confirmSwitch")
+								)}
+							</Button>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
+
+				{/* Import from Git Dialog */}
+				<Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
+					<DialogContent className="max-w-lg">
+						<DialogHeader>
+							<DialogTitle className="flex items-center gap-2">
+								<GitBranchIcon className="h-5 w-5" />
+								{t("workspace.importFromGit")}
+							</DialogTitle>
+							<DialogDescription>
+								{t("workspace.importFromGitDescription")}
+							</DialogDescription>
+						</DialogHeader>
+						<div className="space-y-4 py-4">
+							<div className="space-y-2">
+								<Label htmlFor="gitUrl">{t("workspace.gitUrl")}</Label>
+								<div className="flex gap-2">
+									<Input
+										id="gitUrl"
+										placeholder="https://github.com/user/repo"
+										value={importGitUrl}
+										onChange={(e) => {
+											setImportGitUrl(e.target.value);
+											setImportPreview(null);
+										}}
+									/>
+									<Button
+										variant="outline"
+										onClick={handlePreviewGitImport}
+										disabled={!importGitUrl.trim() || previewGitImportMutation.isPending}
+									>
+										{previewGitImportMutation.isPending ? (
+											<Loader2Icon className="h-4 w-4 animate-spin" />
+										) : (
+											<SearchIcon className="h-4 w-4" />
+										)}
+									</Button>
+								</div>
+								{previewGitImportMutation.isError && (
+									<p className="text-sm text-destructive">
+										{t("workspace.previewFailed")}
+									</p>
+								)}
+							</div>
+
+							{importPreview && (
+								<div className="rounded-lg border p-3 space-y-2">
+									<div className="text-sm font-medium flex items-center gap-2">
+										<CheckIcon className="h-4 w-4 text-green-500" />
+										{t("workspace.previewReady")}
+									</div>
+									<div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+										<div className="flex items-center gap-1">
+											{importPreview.hasSettingsJson ? (
+												<CheckIcon className="h-3 w-3 text-green-500" />
+											) : (
+												<span className="h-3 w-3" />
+											)}
+											settings.json
+										</div>
+										<div className="flex items-center gap-1">
+											{importPreview.hasClaudeMd ? (
+												<CheckIcon className="h-3 w-3 text-green-500" />
+											) : (
+												<span className="h-3 w-3" />
+											)}
+											CLAUDE.md
+										</div>
+										<div className="flex items-center gap-1">
+											{importPreview.hasMcpJson ? (
+												<CheckIcon className="h-3 w-3 text-green-500" />
+											) : (
+												<span className="h-3 w-3" />
+											)}
+											.mcp.json
+										</div>
+										<div className="flex items-center gap-1">
+											{importPreview.hasHooks ? (
+												<CheckIcon className="h-3 w-3 text-green-500" />
+											) : (
+												<span className="h-3 w-3" />
+											)}
+											hooks
+										</div>
+									</div>
+									<div className="flex gap-3 text-xs pt-1">
+										<span>{importPreview.agentsCount} {t("workspace.agents")}</span>
+										<span>{importPreview.commandsCount} {t("workspace.commands")}</span>
+										<span>{importPreview.skillsCount} {t("workspace.skills")}</span>
+										<span>{importPreview.pluginsCount} {t("workspace.plugins")}</span>
+									</div>
+									{importPreview.rootMdFiles.length > 0 && (
+										<div className="flex flex-wrap gap-1 pt-1">
+											{importPreview.rootMdFiles.map((file) => (
+												<Badge key={file} variant="outline" className="text-[10px]">
+													<FileTextIcon className="h-3 w-3 mr-1" />
+													{file}
+												</Badge>
+											))}
+										</div>
+									)}
+								</div>
+							)}
+
+							<div className="space-y-2">
+								<Label htmlFor="importTitle">{t("workspace.workspaceName")}</Label>
+								<Input
+									id="importTitle"
+									placeholder={t("configSwitcher.newConfig")}
+									value={importTitle}
+									onChange={(e) => setImportTitle(e.target.value)}
+								/>
+							</div>
+						</div>
+						<DialogFooter>
+							<Button
+								variant="outline"
+								onClick={() => setIsImportDialogOpen(false)}
+							>
+								{t("workspace.cancel")}
+							</Button>
+							<Button
+								onClick={handleImportFromGit}
+								disabled={
+									!importGitUrl.trim() ||
+									!importTitle.trim() ||
+									importWorkspaceFromGitMutation.isPending
+								}
+							>
+								{importWorkspaceFromGitMutation.isPending ? (
+									<>
+										<Loader2Icon className="h-4 w-4 animate-spin" />
+										{t("workspace.importing")}
+									</>
+								) : (
+									<>
+										<DownloadIcon className="h-4 w-4" />
+										{t("workspace.import")}
+									</>
+								)}
 							</Button>
 						</DialogFooter>
 					</DialogContent>

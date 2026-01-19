@@ -329,5 +329,14 @@
 	"workspace.confirmSwitch": "Switch Workspace",
 	"workspace.switching": "Switching...",
 	"toast.workspaceSynced": "Workspace synced successfully",
-	"toast.workspaceSyncFailed": "Failed to sync workspace: {{error}}"
+	"toast.workspaceSyncFailed": "Failed to sync workspace: {{error}}",
+	"toast.workspaceImported": "Workspace imported successfully",
+	"toast.workspaceImportFailed": "Failed to import workspace: {{error}}",
+	"workspace.importFromGit": "Import from Git",
+	"workspace.importFromGitDescription": "Import a Claude Code community setup (skills, commands, agents) from a Git repository",
+	"workspace.gitUrl": "Git Repository URL",
+	"workspace.previewFailed": "Failed to preview repository. Please check the URL and try again.",
+	"workspace.previewReady": "Repository scanned successfully",
+	"workspace.importing": "Importing...",
+	"workspace.import": "Import"
 }
