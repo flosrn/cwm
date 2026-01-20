@@ -34,7 +34,10 @@ pub use stores::{
 };
 
 // Workspace commands
-pub use workspace::{get_claude_dir_counts, refresh_workspace_counts, sync_workspace_from_claude};
+pub use workspace::{
+    copy_items_to_claude, copy_workspace_settings, get_claude_dir_counts, get_workspace_settings,
+    list_workspace_items, refresh_workspace_counts, sync_workspace_from_claude,
+};
 
 // MCP commands
 pub use mcp::{
@@ -71,3 +74,6 @@ pub use updates::{
 
 // Git import commands
 pub use git_import::{import_workspace_from_git, preview_git_import};
+
+// Git commands
+pub use git::{create_git_branch, get_current_git_branch, list_git_branches};

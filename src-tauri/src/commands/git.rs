@@ -218,3 +218,70 @@ pub fn git_auto_commit_managed(message: &str) -> Result<(), String> {
     println!("Git auto-commit (managed items only): {}", message);
     Ok(())
 }
+
+/// List all local and remote git branches in ~/.claude
+#[tauri::command]
+pub async fn list_git_branches() -> Result<Vec<String>, String> {
+    if !git_is_repo()? {
+        return Ok(vec![]);
+    }
+
+    let claude_dir = get_claude_dir()?;
+
+    // Get all branches (local and remote)
+    let output = std::process::Command::new("git")
+        .args(["branch", "-a", "--format=%(refname:short)"])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to list branches: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Git branch list failed: {}", stderr));
+    }
+
+    let branches: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && !s.contains("HEAD"))
+        .collect();
+
+    Ok(branches)
+}
+
+/// Create a new git branch in ~/.claude
+#[tauri::command]
+pub async fn create_git_branch(branch_name: String) -> Result<(), String> {
+    if !git_is_repo()? {
+        return Err("~/.claude is not a git repository".to_string());
+    }
+
+    let claude_dir = get_claude_dir()?;
+
+    // Create the branch from current HEAD
+    let output = std::process::Command::new("git")
+        .args(["branch", &branch_name])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to create branch: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.contains("already exists") {
+            return Err(format!("Failed to create branch: {}", stderr));
+        }
+    }
+
+    println!("Created git branch: {}", branch_name);
+    Ok(())
+}
+
+/// Get current git branch name
+#[tauri::command]
+pub async fn get_current_git_branch() -> Result<String, String> {
+    if !git_is_repo()? {
+        return Err("~/.claude is not a git repository".to_string());
+    }
+
+    git_current_branch()
+}

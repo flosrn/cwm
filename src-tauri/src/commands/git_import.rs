@@ -443,6 +443,7 @@ pub async fn import_workspace_from_git(
                 .as_secs(),
         ),
         source_url: Some(url),
+        git_branch: None,
     };
 
     // Add store to collection

@@ -11,9 +11,12 @@ use commands::{
     create_config, delete_config, get_current_store, get_store, get_stores,
     reset_to_original_config, set_using_config, update_config,
     // Workspace commands
-    get_claude_dir_counts, refresh_workspace_counts, sync_workspace_from_claude,
+    copy_items_to_claude, copy_workspace_settings, get_claude_dir_counts, get_workspace_settings,
+    list_workspace_items, refresh_workspace_counts, sync_workspace_from_claude,
     // Git import commands
     import_workspace_from_git, preview_git_import,
+    // Git commands
+    create_git_branch, get_current_git_branch, list_git_branches,
     // MCP commands
     check_mcp_server_exists, delete_global_mcp_server, get_global_mcp_servers,
     update_global_mcp_server,
@@ -242,11 +245,18 @@ pub fn run() {
             sync_workspace_from_claude,
             refresh_workspace_counts,
             get_claude_dir_counts,
+            list_workspace_items,
+            copy_items_to_claude,
+            get_workspace_settings,
+            copy_workspace_settings,
             read_claude_plugins,
             toggle_plugin,
             delete_local_plugin,
             preview_git_import,
-            import_workspace_from_git
+            import_workspace_from_git,
+            list_git_branches,
+            create_git_branch,
+            get_current_git_branch
         ])
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]

@@ -5,9 +5,19 @@ import {
 	useSuspenseQuery,
 } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
-import { nanoid } from "nanoid";
 import { toast } from "sonner";
 import i18n from "../i18n";
+
+// Generate a readable workspace ID from title (e.g., "GSD" -> "ws_gsd", "My Config" -> "ws_my_config")
+const generateWorkspaceId = (title: string): string => {
+	const slug = title
+		.toLowerCase()
+		.trim()
+		.replace(/[^a-z0-9]+/g, "_") // Replace non-alphanumeric with underscore
+		.replace(/^_+|_+$/g, "") // Remove leading/trailing underscores
+		.substring(0, 20); // Limit length
+	return `ws_${slug || "workspace"}`;
+};
 
 export type ConfigType =
 	| "user"
@@ -34,12 +44,12 @@ export interface ClaudeSettings {
 export type WorkspaceType = "settings_only" | "full_directory";
 
 export interface ConfigStore {
-	id: string; // nanoid(6)
+	id: string; // ws_<slug> format
 	title: string;
 	createdAt: number;
 	settings: ClaudeSettings;
 	using: boolean;
-	// NEW: Workspace support
+	// Workspace support
 	workspaceType: WorkspaceType;
 	workspacePath?: string;
 	includeScripts: boolean;
@@ -51,6 +61,8 @@ export interface ConfigStore {
 	lastSynced?: number;
 	// Git import source tracking
 	sourceUrl?: string;
+	// Git branch management - automatically checkout this branch when switching
+	gitBranch?: string;
 }
 
 export interface GitImportPreview {
@@ -72,6 +84,35 @@ export interface ClaudeDirCounts {
 	agents: number;
 	plugins: number;
 }
+
+export type WorkspaceItemType = "skill" | "command" | "agent" | "hook" | "plugin";
+
+export interface WorkspaceItem {
+	name: string;
+	relativePath: string;
+	itemType: WorkspaceItemType;
+}
+
+export interface WorkspaceItems {
+	skills: WorkspaceItem[];
+	commands: WorkspaceItem[];
+	agents: WorkspaceItem[];
+	hooks: WorkspaceItem[];
+	plugins: WorkspaceItem[];
+}
+
+export interface CopyItemsResult {
+	copiedCount: number;
+	failedItems: string[];
+}
+
+export interface WorkspaceSettings {
+	content: Record<string, unknown>;
+	referencedFiles: string[];
+	exists: boolean;
+}
+
+export type SettingsMergeMode = "replace" | "merge";
 
 export interface McpServer {
 	config: Record<string, any>;
@@ -191,7 +232,7 @@ export const useCreateConfig = () => {
 			workspaceType?: WorkspaceType;
 			includeScripts?: boolean;
 		}) => {
-			const id = nanoid(6);
+			const id = generateWorkspaceId(title);
 			return invoke<ConfigStore>("create_config", {
 				id,
 				title,
@@ -260,9 +301,14 @@ export const useSetCurrentConfig = () => {
 	const queryClient = useQueryClient();
 
 	return useMutation({
-		mutationFn: (storeId: string) =>
-			invoke<void>("set_using_config", { storeId }),
+		mutationFn: (storeId: string) => {
+			console.log("🔴🔴🔴 SET_USING_CONFIG CALLED! storeId:", storeId);
+			console.log("🔴🔴🔴 TIMESTAMP:", new Date().toISOString());
+			console.trace("Stack trace for set_using_config:");
+			return invoke<void>("set_using_config", { storeId });
+		},
 		onSuccess: () => {
+			console.log("🔴🔴🔴 SET_USING_CONFIG SUCCESS - this clears ~/.claude!");
 			queryClient.invalidateQueries({ queryKey: ["stores"] });
 			queryClient.invalidateQueries({ queryKey: ["current-store"] });
 			queryClient.invalidateQueries({ queryKey: ["config-file", "user"] });
@@ -291,11 +337,13 @@ export const useUpdateConfig = () => {
 			storeId,
 			title,
 			settings,
+			gitBranch,
 		}: {
 			storeId: string;
 			title: string;
 			settings: unknown;
-		}) => invoke<ConfigStore>("update_config", { storeId, title, settings }),
+			gitBranch?: string | null;
+		}) => invoke<ConfigStore>("update_config", { storeId, title, settings, gitBranch }),
 		onSuccess: async (data) => {
 			if (data.using) {
 				toast.success(
@@ -815,7 +863,7 @@ export const useImportWorkspaceFromGit = () => {
 
 	return useMutation({
 		mutationFn: async ({ url, title }: { url: string; title: string }) => {
-			const id = nanoid(6);
+			const id = generateWorkspaceId(title);
 			return invoke<ConfigStore>("import_workspace_from_git", {
 				url,
 				title,
@@ -836,6 +884,121 @@ export const useImportWorkspaceFromGit = () => {
 	});
 };
 
+// Cherry-pick hooks
+
+export const useWorkspaceItems = (
+	workspaceId: string,
+	options?: { enabled?: boolean },
+) => {
+	return useQuery({
+		queryKey: ["workspace-items", workspaceId],
+		queryFn: () =>
+			invoke<WorkspaceItems>("list_workspace_items", { workspaceId }),
+		enabled: options?.enabled !== false && !!workspaceId,
+	});
+};
+
+export const useCopyItemsToClaude = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({
+			sourceWorkspaceId,
+			items,
+		}: {
+			sourceWorkspaceId: string;
+			items: WorkspaceItem[];
+		}) =>
+			invoke<CopyItemsResult>("copy_items_to_claude", {
+				sourceWorkspaceId,
+				items,
+			}),
+		onSuccess: (result) => {
+			if (result.copiedCount > 0) {
+				toast.success(
+					i18n.t("toast.itemsCopied", { count: result.copiedCount }),
+				);
+			}
+			if (result.failedItems.length > 0) {
+				toast.error(
+					i18n.t("toast.itemsCopyFailed", {
+						count: result.failedItems.length,
+					}),
+				);
+			}
+			// Only invalidate claude-dir-counts to refresh live counts
+			// Do NOT invalidate stores/current-store to avoid any workspace switching
+			queryClient.invalidateQueries({ queryKey: ["claude-dir-counts"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(i18n.t("toast.itemsCopyError", { error: errorMessage }));
+		},
+	});
+};
+
+export const useWorkspaceSettings = (
+	workspaceId: string,
+	options?: { enabled?: boolean },
+) => {
+	return useQuery({
+		queryKey: ["workspace-settings", workspaceId],
+		queryFn: () =>
+			invoke<WorkspaceSettings>("get_workspace_settings", { workspaceId }),
+		enabled: options?.enabled !== false && !!workspaceId,
+	});
+};
+
+export const useCopyWorkspaceSettings = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: ({
+			sourceWorkspaceId,
+			mode,
+			copyReferencedFiles,
+		}: {
+			sourceWorkspaceId: string;
+			mode: SettingsMergeMode;
+			copyReferencedFiles: boolean;
+		}) => {
+			console.log("🔵 CHERRY-PICK SETTINGS: Starting mutation", { sourceWorkspaceId, mode, copyReferencedFiles });
+			return invoke<CopyItemsResult>("copy_workspace_settings", {
+				sourceWorkspaceId,
+				mode,
+				copyReferencedFiles,
+			});
+		},
+		onSuccess: (result) => {
+			console.log("🟢 CHERRY-PICK SETTINGS: Success!", result);
+			if (result.copiedCount > 0) {
+				toast.success(
+					i18n.t("toast.settingsCopied", { count: result.copiedCount }),
+				);
+			}
+			if (result.failedItems.length > 0) {
+				toast.error(
+					i18n.t("toast.settingsCopyFailed", {
+						count: result.failedItems.length,
+					}),
+				);
+			}
+			// Only invalidate config-file to show updated settings
+			// Do NOT invalidate stores/current-store to avoid any workspace switching
+			console.log("🟢 CHERRY-PICK SETTINGS: Invalidating ONLY config-file");
+			queryClient.invalidateQueries({ queryKey: ["config-file", "user"] });
+			console.log("🟢 CHERRY-PICK SETTINGS: Done - NO stores/current-store invalidation");
+		},
+		onError: (error) => {
+			console.log("🔴 CHERRY-PICK SETTINGS: Error!", error);
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(i18n.t("toast.settingsCopyError", { error: errorMessage }));
+		},
+	});
+};
+
 // Helper function to rebuild tray menu
 const rebuildTrayMenu = async () => {
 	try {
@@ -843,4 +1006,34 @@ const rebuildTrayMenu = async () => {
 	} catch (error) {
 		console.error("Failed to rebuild tray menu:", error);
 	}
+};
+
+// ============================================================================
+// Git Branch Hooks
+// ============================================================================
+
+export const useGitBranches = () => {
+	return useQuery({
+		queryKey: ["git-branches"],
+		queryFn: () => invoke<string[]>("list_git_branches"),
+	});
+};
+
+export const useCurrentGitBranch = () => {
+	return useQuery({
+		queryKey: ["current-git-branch"],
+		queryFn: () => invoke<string>("get_current_git_branch"),
+	});
+};
+
+export const useCreateGitBranch = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (branchName: string) =>
+			invoke<void>("create_git_branch", { branchName }),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ["git-branches"] });
+		},
+	});
 };

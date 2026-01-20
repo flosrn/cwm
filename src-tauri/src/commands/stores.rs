@@ -58,6 +58,10 @@ pub struct ConfigStore {
     // Git import source tracking
     #[serde(rename = "sourceUrl", skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
+
+    // Git branch management - automatically checkout this branch when switching to this workspace
+    #[serde(rename = "gitBranch", skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -272,6 +276,7 @@ pub async fn create_config(
                         .as_secs(),
                 ),
                 source_url: None,
+                git_branch: None,
             };
 
             stores_data.configs.push(original_store);
@@ -354,6 +359,7 @@ pub async fn create_config(
                 .as_secs(),
         ),
         source_url: None,
+        git_branch: None,
     };
 
     // Add store to collection
@@ -375,6 +381,7 @@ pub async fn update_config(
     store_id: String,
     title: String,
     settings: Value,
+    git_branch: Option<String>,
 ) -> Result<ConfigStore, String> {
     let home_dir = get_home_dir()?;
     let mut stores_data = read_stores()?;
@@ -394,6 +401,7 @@ pub async fn update_config(
     let store = &mut stores_data.configs[store_index];
     store.title = title.clone();
     store.settings = settings.clone();
+    store.git_branch = git_branch;
 
     // If this store is currently in use, also update the user's settings.json with partial update
     if store.using {
@@ -471,6 +479,7 @@ pub async fn delete_config(store_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn set_using_config(store_id: String) -> Result<(), String> {
+    println!("🔴🔴🔴 SET_USING_CONFIG CALLED! store_id: {} - THIS WILL CLEAR ~/.claude!", store_id);
     let home_dir = get_home_dir()?;
     let mut stores_data = read_stores()?;
 
@@ -550,8 +559,14 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
 
             // 4. Switch git branch reference (without checkout) to keep git in sync
             if let Ok(true) = git_is_repo() {
-                let sanitized_title = sanitize_branch_name(&selected_store.title);
-                let branch_name = format!("workspace/{}", sanitized_title);
+                // Use custom gitBranch if set, otherwise generate from title
+                let branch_name = if let Some(ref custom_branch) = selected_store.git_branch {
+                    custom_branch.clone()
+                } else {
+                    let sanitized_title = sanitize_branch_name(&selected_store.title);
+                    format!("workspace/{}", sanitized_title)
+                };
+
                 match git_switch_branch_ref(&branch_name) {
                     Ok(_) => println!("Git branch ref switched to: {}", branch_name),
                     Err(e) => println!(
@@ -621,6 +636,17 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
 
     // Write back to stores file
     write_stores(&stores_data)?;
+
+    // Final verification
+    let home_dir_verify = get_home_dir()?;
+    let claude_dir_verify = home_dir_verify.join(".claude");
+    let agents_count = std::fs::read_dir(claude_dir_verify.join("agents"))
+        .map(|d| d.count())
+        .unwrap_or(0);
+    let commands_count = std::fs::read_dir(claude_dir_verify.join("commands"))
+        .map(|d| d.count())
+        .unwrap_or(0);
+    println!("🟢🟢🟢 FINAL VERIFICATION: ~/.claude has {} agents, {} commands", agents_count, commands_count);
 
     println!("✅ Workspace switch completed successfully");
     Ok(())
