@@ -1,10 +1,11 @@
 use fs_extra::dir::{copy as copy_dir, CopyOptions};
+use std::os::unix::fs::symlink;
 
 use crate::commands::git::{git_auto_commit, git_has_changes, git_is_repo};
 use crate::commands::stores::{ConfigStore, WorkspaceType};
 use crate::commands::utils::{
-    get_claude_dir, get_stores_file, get_workspaces_dir, read_stores, should_exclude,
-    write_stores,
+    copy_dir_robust, get_claude_dir, get_home_dir, get_stores_file, get_workspaces_dir, read_stores,
+    should_exclude, write_stores,
 };
 
 // ============================================================================
@@ -273,6 +274,47 @@ fn count_plugin_directories(dir_path: &std::path::Path) -> u32 {
     count
 }
 
+/// Setup symlinks for base configuration items (scripts, plugins)
+/// These are shared across all workspaces and should not be copied
+pub fn setup_base_symlinks() -> Result<(), String> {
+    let home = get_home_dir()?;
+    let claude_dir = home.join(".claude");
+    let base_dir = home.join(".ccconfig/base");
+
+    // Items that should be symlinked from base
+    let symlink_items = ["scripts", "plugins"];
+
+    for item in symlink_items {
+        let source = base_dir.join(item);
+        let target = claude_dir.join(item);
+
+        // Skip if source doesn't exist
+        if !source.exists() {
+            continue;
+        }
+
+        // If target exists and is not a symlink, skip (don't overwrite user data)
+        if target.exists() {
+            if target.is_symlink() {
+                // Remove old symlink
+                std::fs::remove_file(&target)
+                    .map_err(|e| format!("Failed to remove old symlink {}: {}", item, e))?;
+            } else {
+                println!("Warning: {} exists and is not a symlink, skipping", item);
+                continue;
+            }
+        }
+
+        // Create symlink
+        symlink(&source, &target)
+            .map_err(|e| format!("Failed to create symlink for {}: {}", item, e))?;
+
+        println!("Created symlink: {} -> {}", target.display(), source.display());
+    }
+
+    Ok(())
+}
+
 /// Count workspace items (skills, commands, agents, plugins)
 pub fn count_workspace_items(
     workspace_path: &str,
@@ -322,6 +364,12 @@ pub fn copy_claude_to_workspace(workspace_id: &str, include_scripts: bool) -> Re
         let source_path = entry.path();
         let file_name = source_path.file_name().ok_or("Invalid file name")?;
 
+        // Skip symlinks (base items like scripts, plugins)
+        if source_path.is_symlink() {
+            println!("Skipping symlink: {}", source_path.display());
+            continue;
+        }
+
         // Check if this should be excluded
         if should_exclude(&source_path, include_scripts) {
             println!("Excluding: {}", source_path.display());
@@ -330,18 +378,19 @@ pub fn copy_claude_to_workspace(workspace_id: &str, include_scripts: bool) -> Re
 
         let dest_path = workspace_path.join(file_name);
 
+        // Skip if the path doesn't exist (handles broken symlinks, etc.)
+        if !source_path.exists() {
+            println!("Skipping non-existent path: {}", source_path.display());
+            continue;
+        }
+
         if source_path.is_file() {
             std::fs::copy(&source_path, &dest_path)
                 .map_err(|e| format!("Failed to copy file {}: {}", source_path.display(), e))?;
             println!("Copied file: {}", file_name.to_string_lossy());
         } else if source_path.is_dir() {
-            // Use fs_extra for recursive directory copy
-            let mut options = CopyOptions::new();
-            options.overwrite = true;
-            options.copy_inside = true;
-
-            copy_dir(&source_path, &workspace_path, &options)
-                .map_err(|e| format!("Failed to copy directory {}: {}", source_path.display(), e))?;
+            // Use robust copy that handles broken symlinks
+            copy_dir_robust(&source_path, &dest_path)?;
             println!("Copied directory: {}", file_name.to_string_lossy());
         }
     }
@@ -398,8 +447,18 @@ pub fn sync_workspace_content(workspace_path: &str, include_scripts: bool) -> Re
         let source_path = entry.path();
         let file_name = source_path.file_name().ok_or("Invalid file name")?;
 
+        // Skip symlinks (base items like scripts, plugins)
+        if source_path.is_symlink() {
+            continue;
+        }
+
         // Check if this should be excluded
         if should_exclude(&source_path, include_scripts) {
+            continue;
+        }
+
+        // Skip if the path doesn't exist (handles broken symlinks, etc.)
+        if !source_path.exists() {
             continue;
         }
 
@@ -413,11 +472,8 @@ pub fn sync_workspace_content(workspace_path: &str, include_scripts: bool) -> Re
             if dest_path.exists() {
                 let _ = std::fs::remove_dir_all(&dest_path);
             }
-            let mut options = CopyOptions::new();
-            options.overwrite = true;
-            options.copy_inside = true;
-            copy_dir(&source_path, workspace, &options)
-                .map_err(|e| format!("Failed to copy directory {}: {}", source_path.display(), e))?;
+            // Use robust copy that handles broken symlinks
+            copy_dir_robust(&source_path, &dest_path)?;
         }
     }
 
@@ -471,6 +527,12 @@ pub fn copy_workspace_to_claude(workspace_path: &str) -> Result<(), String> {
         let source_path = entry.path();
         let file_name = source_path.file_name().ok_or("Invalid file name")?;
         let file_name_str = file_name.to_string_lossy();
+
+        // Skip symlinks (base items like scripts, plugins)
+        if source_path.is_symlink() {
+            println!("Skipping symlink: {}", file_name_str);
+            continue;
+        }
 
         // Skip excluded items
         if skip_items.contains(&file_name_str.as_ref()) {

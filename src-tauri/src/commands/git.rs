@@ -245,11 +245,9 @@ const MANAGED_ITEMS: &[&str] = &[
     "commands",
     "agents",
     "rules",
-    "plugins",
     "docs",
     "chrome",
     "song",
-    "scripts",
 ];
 
 /// Auto-commit only managed workspace items (not user's work-in-progress files)

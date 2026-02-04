@@ -4,7 +4,7 @@ use crate::commands::git::{git_auto_commit, git_auto_commit_managed, git_current
 use crate::commands::utils::{get_app_config_dir, get_home_dir, get_stores_file, read_stores, write_stores};
 use crate::commands::workspace::{
     clear_claude_dir_for_switch, copy_claude_to_workspace, copy_workspace_to_claude,
-    count_workspace_items, sync_workspace_content,
+    count_workspace_items, setup_base_symlinks, sync_workspace_content,
 };
 use crate::commands::updates::unlock_cc_ext;
 
@@ -99,6 +99,24 @@ impl Default for StoresData {
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+/// Deep merge two JSON values. If both are objects, merge recursively.
+/// Otherwise, the overlay value replaces the base value.
+fn deep_merge_json(base: &mut Value, overlay: &Value) {
+    match (base, overlay) {
+        (Value::Object(base_obj), Value::Object(overlay_obj)) => {
+            for (key, overlay_value) in overlay_obj {
+                match base_obj.get_mut(key) {
+                    Some(base_value) => deep_merge_json(base_value, overlay_value),
+                    None => { base_obj.insert(key.clone(), overlay_value.clone()); }
+                }
+            }
+        }
+        (base, overlay) => {
+            *base = overlay.clone();
+        }
+    }
+}
 
 /// Sanitize a title for use as a git branch name
 fn sanitize_branch_name(title: &str) -> String {
@@ -305,17 +323,7 @@ pub async fn create_config(
         };
 
         // Merge the new settings into existing settings (partial update)
-        if let Some(settings_obj) = settings.as_object() {
-            if let Some(existing_obj) = existing_settings.as_object_mut() {
-                for (key, value) in settings_obj {
-                    existing_obj.insert(key.clone(), value.clone());
-                }
-            } else {
-                existing_settings = settings.clone();
-            }
-        } else {
-            existing_settings = settings.clone();
-        }
+        deep_merge_json(&mut existing_settings, &settings);
 
         // Write the merged settings back to file
         let json_content = serde_json::to_string_pretty(&existing_settings)
@@ -424,17 +432,7 @@ pub async fn update_config(
         };
 
         // Merge the new settings into existing settings (partial update)
-        if let Some(settings_obj) = settings.as_object() {
-            if let Some(existing_obj) = existing_settings.as_object_mut() {
-                for (key, value) in settings_obj {
-                    existing_obj.insert(key.clone(), value.clone());
-                }
-            } else {
-                existing_settings = settings.clone();
-            }
-        } else {
-            existing_settings = settings.clone();
-        }
+        deep_merge_json(&mut existing_settings, &settings);
 
         // Write the merged settings back to file
         let json_content = serde_json::to_string_pretty(&existing_settings)
@@ -527,15 +525,44 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
             // Adding delays between operations to let file watchers stabilize
             println!("Using file-copy switching for compatibility (with delays)");
 
-            // 1. Sync current workspace before switching (save current state)
-            if let Some(current_store) = stores_data.configs.iter().find(|s| s.using) {
+            // 1. Sync current workspace before switching (save current state) with debounce
+            if let Some(current_store_idx) = stores_data.configs.iter().position(|s| s.using) {
+                let current_store = &stores_data.configs[current_store_idx];
                 if current_store.workspace_type == WorkspaceType::FullDirectory {
                     if let Some(current_ws_path) = &current_store.workspace_path {
-                        println!(
-                            "Syncing current workspace before switch: {}",
-                            current_store.title
-                        );
-                        let _ = sync_workspace_content(current_ws_path, current_store.include_scripts);
+                        // Check if we should sync (debounce: only if last sync was > 5 seconds ago)
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+
+                        let should_sync = current_store.last_synced
+                            .map(|last_ts| now.saturating_sub(last_ts) > 5)
+                            .unwrap_or(true);
+
+                        if should_sync {
+                            println!(
+                                "Auto-syncing current workspace before switch: {}",
+                                current_store.title
+                            );
+                            match sync_workspace_content(current_ws_path, current_store.include_scripts) {
+                                Ok(_) => {
+                                    println!("✓ Auto-synced current workspace: {}", current_store.title);
+                                    // Update last_synced timestamp
+                                    stores_data.configs[current_store_idx].last_synced = Some(now);
+                                }
+                                Err(e) => {
+                                    println!("⚠ Warning: Could not auto-sync current workspace (non-blocking): {}", e);
+                                }
+                            }
+                        } else {
+                            let last_sync_ago = current_store.last_synced.unwrap_or(0);
+                            let seconds_ago = now.saturating_sub(last_sync_ago);
+                            println!(
+                                "Skipping auto-sync for {} (synced {} seconds ago, debounce: 5s)",
+                                current_store.title, seconds_ago
+                            );
+                        }
                     }
                 }
             }
@@ -553,6 +580,11 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
             // 3. Copy target workspace to ~/.claude
             copy_workspace_to_claude(workspace_path)?;
             println!("Restored workspace from: {}", workspace_path);
+
+            // 3.5. Setup symlinks for base items (scripts, plugins)
+            if let Err(e) = setup_base_symlinks() {
+                println!("Warning: Failed to setup base symlinks (non-blocking): {}", e);
+            }
 
             // Delay after copying to let watchers process new files
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
@@ -615,17 +647,7 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
             };
 
             // Merge the new settings into existing settings (partial update)
-            if let Some(settings_obj) = selected_store.settings.as_object() {
-                if let Some(existing_obj) = existing_settings.as_object_mut() {
-                    for (key, value) in settings_obj {
-                        existing_obj.insert(key.clone(), value.clone());
-                    }
-                } else {
-                    existing_settings = selected_store.settings.clone();
-                }
-            } else {
-                existing_settings = selected_store.settings.clone();
-            }
+            deep_merge_json(&mut existing_settings, &selected_store.settings);
 
             // Write the merged settings back to file
             let json_content = serde_json::to_string_pretty(&existing_settings)
