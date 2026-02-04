@@ -7,6 +7,91 @@ pub fn git_is_repo() -> Result<bool, String> {
     Ok(git_dir.exists())
 }
 
+/// Initialize git repository in ~/.claude if it doesn't exist
+/// Returns true if repo was initialized, false if it already existed
+pub fn git_init() -> Result<bool, String> {
+    let claude_dir = get_claude_dir()?;
+
+    // Check if already a git repo
+    if git_is_repo()? {
+        println!("Git repo already exists in ~/.claude");
+        return Ok(false);
+    }
+
+    println!("Initializing git repository in ~/.claude...");
+
+    // git init
+    let init_output = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&claude_dir)
+        .output()
+        .map_err(|e| format!("Failed to run git init: {}", e))?;
+
+    if !init_output.status.success() {
+        let stderr = String::from_utf8_lossy(&init_output.stderr);
+        return Err(format!("Git init failed: {}", stderr));
+    }
+
+    println!("Git repository initialized in ~/.claude");
+    Ok(true)
+}
+
+/// Ensure ~/.claude is a git repository, initializing if needed
+/// Also creates initial commit with managed files if repo was just created
+pub fn git_ensure_repo(initial_branch: Option<&str>) -> Result<(), String> {
+    let was_initialized = git_init()?;
+
+    if was_initialized {
+        let claude_dir = get_claude_dir()?;
+
+        // Create initial branch if specified
+        let branch_name = initial_branch.unwrap_or("workspace/default");
+
+        // Stage managed items for initial commit
+        for item in MANAGED_ITEMS {
+            let item_path = claude_dir.join(item);
+            if item_path.exists() {
+                let _ = std::process::Command::new("git")
+                    .args(["add", item])
+                    .current_dir(&claude_dir)
+                    .output();
+            }
+        }
+
+        // Create initial commit
+        let commit_output = std::process::Command::new("git")
+            .args(["commit", "-m", "Initial commit - CWM workspace"])
+            .current_dir(&claude_dir)
+            .output()
+            .map_err(|e| format!("Failed to create initial commit: {}", e))?;
+
+        if !commit_output.status.success() {
+            let stderr = String::from_utf8_lossy(&commit_output.stderr);
+            // Only error if it's not "nothing to commit"
+            if !stderr.contains("nothing to commit") {
+                println!("Warning: Initial commit may have failed: {}", stderr);
+            }
+        } else {
+            println!("Created initial commit with managed files");
+        }
+
+        // Rename branch to workspace branch
+        if branch_name != "master" && branch_name != "main" {
+            let rename_output = std::process::Command::new("git")
+                .args(["branch", "-M", branch_name])
+                .current_dir(&claude_dir)
+                .output()
+                .map_err(|e| format!("Failed to rename branch: {}", e))?;
+
+            if rename_output.status.success() {
+                println!("Created initial branch: {}", branch_name);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Get current git branch name
 pub fn git_current_branch() -> Result<String, String> {
     let claude_dir = get_claude_dir()?;

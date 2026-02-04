@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::commands::git::{git_auto_commit, git_auto_commit_managed, git_current_branch, git_has_changes, git_is_repo, git_switch_branch_ref};
+use crate::commands::git::{git_auto_commit, git_auto_commit_managed, git_current_branch, git_ensure_repo, git_has_changes, git_is_repo, git_switch_branch_ref};
 use crate::commands::utils::{get_app_config_dir, get_home_dir, get_stores_file, read_stores, write_stores};
 use crate::commands::workspace::{
     clear_claude_dir_for_switch, copy_claude_to_workspace, copy_workspace_to_claude,
@@ -557,16 +557,23 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
             // Delay after copying to let watchers process new files
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-            // 4. Switch git branch reference (without checkout) to keep git in sync
-            if let Ok(true) = git_is_repo() {
-                // Use custom gitBranch if set, otherwise generate from title
-                let branch_name = if let Some(ref custom_branch) = selected_store.git_branch {
-                    custom_branch.clone()
-                } else {
-                    let sanitized_title = sanitize_branch_name(&selected_store.title);
-                    format!("workspace/{}", sanitized_title)
-                };
+            // 4. Ensure git repo exists (auto-initialize if needed) and switch branch
+            // Use custom gitBranch if set, otherwise generate from title
+            let branch_name = if let Some(ref custom_branch) = selected_store.git_branch {
+                custom_branch.clone()
+            } else {
+                let sanitized_title = sanitize_branch_name(&selected_store.title);
+                format!("workspace/{}", sanitized_title)
+            };
 
+            // Auto-initialize git if not already a repo
+            match git_ensure_repo(Some(&branch_name)) {
+                Ok(_) => println!("Git repo ensured in ~/.claude"),
+                Err(e) => println!("Warning: Could not ensure git repo (non-blocking): {}", e),
+            }
+
+            // Switch git branch reference (without checkout) to keep git in sync
+            if let Ok(true) = git_is_repo() {
                 match git_switch_branch_ref(&branch_name) {
                     Ok(_) => println!("Git branch ref switched to: {}", branch_name),
                     Err(e) => println!(
