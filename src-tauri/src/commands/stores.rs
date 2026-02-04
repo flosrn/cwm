@@ -4,7 +4,7 @@ use crate::commands::git::{git_auto_commit, git_auto_commit_managed, git_current
 use crate::commands::utils::{get_app_config_dir, get_home_dir, get_stores_file, read_stores, write_stores};
 use crate::commands::workspace::{
     clear_claude_dir_for_switch, copy_claude_to_workspace, copy_workspace_to_claude,
-    count_workspace_items, setup_base_symlinks, sync_workspace_content,
+    count_workspace_items, sync_workspace_content,
 };
 use crate::commands::updates::unlock_cc_ext;
 
@@ -581,10 +581,8 @@ pub async fn set_using_config(store_id: String) -> Result<(), String> {
             copy_workspace_to_claude(workspace_path)?;
             println!("Restored workspace from: {}", workspace_path);
 
-            // 3.5. Setup symlinks for base items (scripts, plugins)
-            if let Err(e) = setup_base_symlinks() {
-                println!("Warning: Failed to setup base symlinks (non-blocking): {}", e);
-            }
+            // Note: scripts/ and plugins/ stay in ~/.claude directly (not managed per-workspace)
+            // They are shared across all workspaces and should not be copied/symlinked
 
             // Delay after copying to let watchers process new files
             tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
