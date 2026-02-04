@@ -1037,3 +1037,55 @@ export const useCreateGitBranch = () => {
 		},
 	});
 };
+
+// ============================================================================
+// METHODOLOGY HOOKS
+// ============================================================================
+
+export interface Methodology {
+	id: string;
+	name: string;
+	description: string;
+	version: string;
+	color: string | null;
+	icon: string | null;
+	path: string;
+	skills_count: number;
+	commands_count: number;
+	agents_count: number;
+	is_active: boolean;
+}
+
+export const useMethodologies = () => {
+	return useQuery({
+		queryKey: ["methodologies"],
+		queryFn: () => invoke<Methodology[]>("list_methodologies"),
+	});
+};
+
+export const useActiveMethodology = () => {
+	return useQuery({
+		queryKey: ["active-methodology"],
+		queryFn: () => invoke<Methodology | null>("get_active_methodology"),
+	});
+};
+
+export const useSwitchMethodology = () => {
+	const queryClient = useQueryClient();
+
+	return useMutation({
+		mutationFn: (methodologyId: string) =>
+			invoke<void>("switch_methodology", { methodologyId }),
+		onSuccess: () => {
+			toast.success(i18n.t("toast.methodologySwitched"));
+			queryClient.invalidateQueries({ queryKey: ["methodologies"] });
+			queryClient.invalidateQueries({ queryKey: ["active-methodology"] });
+			queryClient.invalidateQueries({ queryKey: ["stores"] });
+		},
+		onError: (error) => {
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+			toast.error(i18n.t("toast.methodologySwitchFailed", { error: errorMessage }));
+		},
+	});
+};

@@ -2,6 +2,7 @@ import { Kimi, Minimax, ZAI } from "@lobehub/icons";
 import {
 	AlertTriangleIcon,
 	CheckIcon,
+	CopyIcon,
 	DownloadIcon,
 	EllipsisVerticalIcon,
 	FileTextIcon,
@@ -14,10 +15,14 @@ import {
 	RefreshCwIcon,
 	SearchIcon,
 	SettingsIcon,
+	Trash2Icon,
+	Layers,
 } from "lucide-react";
-import { useState } from "react";
+import { MethodologySelector } from "@/components/MethodologySelector";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
+import { CherryPickDialog } from "@/components/CherryPickDialog";
 import { GLMDialog } from "@/components/GLMBanner";
 import { KimiDialog } from "@/components/KimiDialog";
 import { MiniMaxDialog } from "@/components/MiniMaxDialog";
@@ -54,6 +59,7 @@ import {
 	type WorkspaceType,
 	useClaudeDirCounts,
 	useCreateConfig,
+	useDeleteConfig,
 	useImportWorkspaceFromGit,
 	usePreviewGitImport,
 	useResetToOriginalConfig,
@@ -63,8 +69,33 @@ import {
 } from "../lib/query";
 
 export function ConfigSwitcherPage() {
+	const [showMethodologies, setShowMethodologies] = useState(true);
+	const { t } = useTranslation();
+
 	return (
 		<div className="">
+			{/* Methodology Section */}
+			<section className="border-b">
+				<div
+					className="flex items-center justify-between p-3 px-4 cursor-pointer hover:bg-muted/50"
+					onClick={() => setShowMethodologies(!showMethodologies)}
+				>
+					<div className="flex items-center gap-2">
+						<Layers className="w-4 h-4 text-muted-foreground" />
+						<span className="font-medium text-sm">{t("methodology.title")}</span>
+					</div>
+					<Button variant="ghost" size="sm">
+						{showMethodologies ? "−" : "+"}
+					</Button>
+				</div>
+				{showMethodologies && (
+					<div className="px-4 pb-4">
+						<MethodologySelector />
+					</div>
+				)}
+			</section>
+
+			{/* Workspaces Section */}
 			<section>
 				<ConfigStores />
 			</section>
@@ -79,6 +110,7 @@ function ConfigStores() {
 	const setCurrentStoreMutation = useSetCurrentConfig();
 	const resetToOriginalMutation = useResetToOriginalConfig();
 	const syncWorkspaceMutation = useSyncWorkspaceFromClaude();
+	const deleteConfigMutation = useDeleteConfig();
 	const navigate = useNavigate();
 
 	// New workspace dialog state
@@ -100,10 +132,37 @@ function ConfigStores() {
 	const [pendingSwitchStoreId, setPendingSwitchStoreId] = useState<string | null>(null);
 	const [pendingSwitchToOriginal, setPendingSwitchToOriginal] = useState(false);
 
+	// Cherry-pick dialog state
+	const [cherryPickWorkspace, setCherryPickWorkspace] = useState<{
+		id: string;
+		title: string;
+	} | null>(null);
+
+	// Delete confirmation dialog state
+	const [deleteWorkspace, setDeleteWorkspace] = useState<{
+		id: string;
+		title: string;
+	} | null>(null);
+
 	const isOriginalConfigActive = !stores.some((store) => store.using);
+	const isSwitchInProgress = setCurrentStoreMutation.isPending || resetToOriginalMutation.isPending;
+
+	// Close cherry-pick dialog if a switch starts
+	useEffect(() => {
+		if (isSwitchInProgress && cherryPickWorkspace) {
+			console.log("⚠️ Switch in progress, closing cherry-pick dialog");
+			setCherryPickWorkspace(null);
+		}
+	}, [isSwitchInProgress, cherryPickWorkspace]);
 
 	const handleStoreClick = (storeId: string, isCurrentStore: boolean) => {
 		if (!isCurrentStore) {
+			console.log("🔄 Opening switch confirmation dialog for:", storeId);
+			// Close cherry-pick dialog if open
+			if (cherryPickWorkspace) {
+				console.log("⚠️ Closing cherry-pick dialog before switch");
+				setCherryPickWorkspace(null);
+			}
 			// Show confirmation dialog before switching
 			setPendingSwitchStoreId(storeId);
 			setPendingSwitchToOriginal(false);
@@ -121,6 +180,7 @@ function ConfigStores() {
 	};
 
 	const confirmSwitch = () => {
+		console.log("✅ Switch confirmed! pendingSwitchStoreId:", pendingSwitchStoreId, "pendingSwitchToOriginal:", pendingSwitchToOriginal);
 		if (pendingSwitchToOriginal) {
 			resetToOriginalMutation.mutate();
 		} else if (pendingSwitchStoreId) {
@@ -673,6 +733,37 @@ function ConfigStores() {
 											</TooltipContent>
 										</Tooltip>
 									)}
+									{isFullDir && !isCurrentStore && (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<button
+													className="hover:bg-primary/10 rounded-lg p-2 hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed"
+													disabled={setCurrentStoreMutation.isPending || resetToOriginalMutation.isPending}
+													onClick={(e) => {
+														e.stopPropagation();
+														// Extra safety: don't open if switch is in progress
+														if (setCurrentStoreMutation.isPending || resetToOriginalMutation.isPending) {
+															console.log("🛑 Cherry-pick blocked: switch in progress");
+															return;
+														}
+														console.log("📋 Opening cherry-pick dialog for:", store.id);
+														setCherryPickWorkspace({
+															id: store.id,
+															title: store.title,
+														});
+													}}
+												>
+													<CopyIcon
+														className="text-muted-foreground"
+														size={14}
+													/>
+												</button>
+											</TooltipTrigger>
+											<TooltipContent>
+												{t("cherryPick.browseTooltip")}
+											</TooltipContent>
+										</Tooltip>
+									)}
 									<button
 										className="hover:bg-primary/10 rounded-lg p-2 hover:text-primary"
 										onClick={(e) => {
@@ -685,6 +776,30 @@ function ConfigStores() {
 											size={14}
 										/>
 									</button>
+									{!isCurrentStore && (
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<button
+													className="hover:bg-destructive/10 rounded-lg p-2 hover:text-destructive"
+													onClick={(e) => {
+														e.stopPropagation();
+														setDeleteWorkspace({
+															id: store.id,
+															title: store.title,
+														});
+													}}
+												>
+													<Trash2Icon
+														className="text-muted-foreground"
+														size={14}
+													/>
+												</button>
+											</TooltipTrigger>
+											<TooltipContent>
+												{t("workspace.delete")}
+											</TooltipContent>
+										</Tooltip>
+									)}
 								</div>
 							</div>
 						);
@@ -875,6 +990,69 @@ function ConfigStores() {
 										<DownloadIcon className="h-4 w-4" />
 										{t("workspace.import")}
 									</>
+								)}
+							</Button>
+						</DialogFooter>
+					</DialogContent>
+				</Dialog>
+
+				{/* Cherry-pick Dialog */}
+				{cherryPickWorkspace && (
+					<CherryPickDialog
+						open={!!cherryPickWorkspace}
+						onOpenChange={(open) => {
+							console.log("🟣 CherryPickDialog onOpenChange:", open, "TIMESTAMP:", new Date().toISOString());
+							if (!open) setCherryPickWorkspace(null);
+						}}
+						workspaceId={cherryPickWorkspace.id}
+						workspaceTitle={cherryPickWorkspace.title}
+					/>
+				)}
+
+				{/* Delete Confirmation Dialog */}
+				<Dialog
+					open={!!deleteWorkspace}
+					onOpenChange={(open) => {
+						if (!open) setDeleteWorkspace(null);
+					}}
+				>
+					<DialogContent className="border border-destructive">
+						<DialogHeader>
+							<DialogTitle className="flex items-center gap-2 text-destructive">
+								<Trash2Icon className="h-5 w-5" />
+								{t("workspace.deleteTitle")}
+							</DialogTitle>
+							<DialogDescription>
+								{t("workspace.deleteDescription", {
+									title: deleteWorkspace?.title,
+								})}
+							</DialogDescription>
+						</DialogHeader>
+						<DialogFooter className="gap-2">
+							<Button
+								variant="outline"
+								onClick={() => setDeleteWorkspace(null)}
+							>
+								{t("workspace.cancel")}
+							</Button>
+							<Button
+								variant="destructive"
+								onClick={() => {
+									if (deleteWorkspace) {
+										deleteConfigMutation.mutate(
+											{ storeId: deleteWorkspace.id },
+											{
+												onSuccess: () => setDeleteWorkspace(null),
+											},
+										);
+									}
+								}}
+								disabled={deleteConfigMutation.isPending}
+							>
+								{deleteConfigMutation.isPending ? (
+									<Loader2Icon className="h-4 w-4 animate-spin" />
+								) : (
+									t("workspace.confirmDelete")
 								)}
 							</Button>
 						</DialogFooter>
