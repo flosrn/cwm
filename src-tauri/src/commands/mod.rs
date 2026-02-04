@@ -8,6 +8,7 @@ pub mod git_import;
 pub mod hooks;
 pub mod mcp;
 pub mod memory;
+pub mod methodology;
 pub mod plugins;
 pub mod projects;
 pub mod skills;

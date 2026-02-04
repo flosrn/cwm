@@ -33,6 +33,8 @@ use commands::{
     // Hooks commands
     add_claude_code_hook, get_notification_settings, remove_claude_code_hook,
     update_claude_code_hook, update_notification_settings,
+    // Methodology commands
+    methodology::{list_methodologies, get_active_methodology, switch_methodology},
     // Updates commands
     check_for_updates, install_and_restart, rebuild_tray_menu_command, track, unlock_cc_ext,
 };
@@ -256,7 +258,10 @@ pub fn run() {
             import_workspace_from_git,
             list_git_branches,
             create_git_branch,
-            get_current_git_branch
+            get_current_git_branch,
+            list_methodologies,
+            get_active_methodology,
+            switch_methodology
         ])
         .on_window_event(|window, event| {
             #[cfg(target_os = "macos")]
